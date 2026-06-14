@@ -75,7 +75,9 @@ if USE_S3:
 
 logger.info("Loading models...")
 try:
-    model            = keras.models.load_model(MODEL_PATH)
+    # Load model with compile=False to avoid Keras version compatibility issues
+    model            = keras.models.load_model(MODEL_PATH, compile=False)
+    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
     scaler_features  = joblib.load(SCALER_FEATURES_PATH)
     scaler_target    = joblib.load(SCALER_TARGET_PATH)
 
