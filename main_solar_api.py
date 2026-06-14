@@ -74,64 +74,65 @@ if USE_S3:
     download_from_s3()
 
 def load_legacy_keras_model(model_path):
-    """Load Keras model handling legacy batch_shape parameter."""
-    import zipfile
-    import tempfile
-    from keras.saving import serialization_lib
-    
+    """Load Keras model with compatibility handling."""
     try:
         # Try standard loading first
         return keras.models.load_model(model_path, compile=False)
-    except (ValueError, TypeError) as e:
-        if 'batch_shape' not in str(e):
+    except (ValueError, TypeError, ImportError) as e:
+        # Fallback for compatibility issues
+        logger.warning(f"Standard loading failed: {str(e)}, attempting compatibility load...")
+        
+        import zipfile
+        import tempfile
+        import shutil
+        
+        # Try extracting and re-saving the model
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                with zipfile.ZipFile(model_path, 'r') as zf:
+                    zf.extractall(tmpdir)
+                
+                # Read model config
+                model_json_path = os.path.join(tmpdir, 'model.json')
+                if os.path.exists(model_json_path):
+                    with open(model_json_path, 'r') as f:
+                        model_config = json.load(f)
+                    
+                    # Fix batch_shape if present
+                    def fix_batch_shape(obj):
+                        if isinstance(obj, dict):
+                            if 'batch_shape' in obj:
+                                batch_shape = obj.pop('batch_shape')
+                                if isinstance(batch_shape, list) and len(batch_shape) > 1:
+                                    obj['shape'] = batch_shape[1:]
+                            for v in obj.values():
+                                fix_batch_shape(v)
+                        elif isinstance(obj, list):
+                            for item in obj:
+                                fix_batch_shape(item)
+                    
+                    fix_batch_shape(model_config)
+                    
+                    # Save fixed config
+                    with open(model_json_path, 'w') as f:
+                        json.dump(model_config, f)
+                
+                # Create temporary fixed model
+                fixed_model_path = model_path + '.fixed'
+                with zipfile.ZipFile(fixed_model_path, 'w') as zf:
+                    for root, dirs, files in os.walk(tmpdir):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            arcname = os.path.relpath(file_path, tmpdir)
+                            zf.write(file_path, arcname)
+                
+                # Load and return
+                model = keras.models.load_model(fixed_model_path, compile=False)
+                os.remove(fixed_model_path)
+                return model
+        except Exception as fallback_error:
+            logger.error(f"Compatibility load also failed: {str(fallback_error)}")
             raise
-        
-        logger.warning("Detected legacy model format with batch_shape, converting...")
-        
-        # Extract and fix the .keras file (which is a zip)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with zipfile.ZipFile(model_path, 'r') as zf:
-                zf.extractall(tmpdir)
-            
-            # Read and modify model.json
-            model_json_path = os.path.join(tmpdir, 'model.json')
-            with open(model_json_path, 'r') as f:
-                model_config = json.load(f)
-            
-            # Replace batch_shape with shape recursively
-            def fix_batch_shape(obj):
-                if isinstance(obj, dict):
-                    if obj.get('class_name') == 'InputLayer' and 'config' in obj:
-                        if 'batch_shape' in obj['config']:
-                            batch_shape = obj['config'].pop('batch_shape')
-                            # batch_shape = [None, ...], shape = [...]
-                            obj['config']['shape'] = batch_shape[1:] if len(batch_shape) > 1 else batch_shape
-                    for v in obj.values():
-                        fix_batch_shape(v)
-                elif isinstance(obj, list):
-                    for item in obj:
-                        fix_batch_shape(item)
-            
-            fix_batch_shape(model_config)
-            
-            # Write fixed config
-            with open(model_json_path, 'w') as f:
-                json.dump(model_config, f)
-            
-            # Recreate zip with fixed model
-            import shutil
-            fixed_model_path = model_path + '.fixed'
-            with zipfile.ZipFile(fixed_model_path, 'w') as zf:
-                for root, dirs, files in os.walk(tmpdir):
-                    for file in files:
-                        file_path = os.path.join(root, file)
-                        arcname = os.path.relpath(file_path, tmpdir)
-                        zf.write(file_path, arcname)
-            
-            # Load from fixed model
-            model = keras.models.load_model(fixed_model_path, compile=False)
-            os.remove(fixed_model_path)
-            return model
 
 logger.info("Loading models...")
 try:
