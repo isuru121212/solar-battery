@@ -1,0 +1,1046 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solar + Battery Optimization Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .tab {
+            padding: 15px 30px;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        
+        .tab:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        
+        .tab.active {
+            background: white;
+            color: #1e3c72;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            margin-bottom: 20px;
+        }
+        
+        .card h2 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+        }
+        
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            border-radius: 10px;
+            color: white;
+            text-align: center;
+        }
+        
+        .metric-label {
+            font-size: 0.9em;
+            opacity: 0.9;
+            margin-bottom: 10px;
+        }
+        
+        .metric-value {
+            font-size: 2em;
+            font-weight: bold;
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 400px;
+            margin-top: 20px;
+        }
+        
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin: 5px;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+            color: white;
+        }
+        
+        .btn-warning {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        
+        input, select, textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #bdc3c7;
+            border-radius: 6px;
+            margin-bottom: 12px;
+            font-size: 1em;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #2c3e50;
+            font-weight: 600;
+        }
+        
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+        
+        .status-online {
+            background: #2ecc71;
+            animation: pulse 2s infinite;
+        }
+        
+        .status-offline {
+            background: #e74c3c;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+        
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border-left: 4px solid #28a745;
+        }
+        
+        .alert-warning {
+            background: #fff3cd;
+            color: #856404;
+            border-left: 4px solid #ffc107;
+        }
+        
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border-left: 4px solid #17a2b8;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+        }
+        
+        tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .input-group {
+            margin-bottom: 15px;
+        }
+        
+        @media (max-width: 1200px) {
+            .grid-2, .grid-3 {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🌞 Solar + Battery Optimization System</h1>
+            <div>Real-time Monitoring & Optimization Dashboard</div>
+        </div>
+        
+        <!-- Navigation -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('solar-tab')">Solar Predictions</button>
+            <button class="tab" onclick="switchTab('input-tab')">Data Input</button>
+            <button class="tab" onclick="switchTab('optimization-tab')">Optimization</button>
+            <button class="tab" onclick="switchTab('system-tab')">System Status</button>
+        </div>
+        
+        <!-- Solar Predictions Tab -->
+        <div id="solar-tab" class="tab-content active">
+            <div class="card">
+                <h2>24-Hour Solar Power Predictions</h2>
+                
+                <div class="grid-3">
+                    <div class="metric-card" style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);">
+                        <div class="metric-label">Mean Power</div>
+                        <div class="metric-value"><span id="solar-mean">0</span> W</div>
+                    </div>
+                    <div class="metric-card" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                        <div class="metric-label">Peak Power</div>
+                        <div class="metric-value"><span id="solar-peak">0</span> W</div>
+                    </div>
+                    <div class="metric-card" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+                        <div class="metric-label">Total Energy</div>
+                        <div class="metric-value"><span id="solar-energy">0</span> kWh</div>
+                    </div>
+                </div>
+                
+                <div class="chart-container">
+                    <canvas id="solarChart"></canvas>
+                </div>
+                
+                <button class="btn-primary" onclick="refreshSolarPredictions()">🔄 Refresh Predictions</button>
+            </div>
+        </div>
+        
+        <!-- Data Input Tab -->
+        <div id="input-tab" class="tab-content">
+            <div class="grid-2">
+                <!-- Real-time Solar Input -->
+                <div class="card">
+                    <h2>Add Real-time Solar Measurement</h2>
+                    
+                    <div class="input-group">
+                        <label>Timestamp</label>
+                        <input type="datetime-local" id="rt-timestamp">
+                    </div>
+                    
+                    <div class="input-group">
+                        <label>Power (W)</label>
+                        <input type="number" id="rt-power" placeholder="e.g., 5000" step="0.1">
+                    </div>
+                    
+                    <button class="btn-success" onclick="addRealtimeSolarMeasurement()">
+                        ➕ Add Measurement
+                    </button>
+                    <button class="btn-primary" onclick="setCurrentTime()">
+                        🕐 Set Current Time
+                    </button>
+                    
+                    <div id="rt-alert" style="margin-top: 15px;"></div>
+                </div>
+                
+                <!-- Load Demand Input -->
+                <div class="card">
+                    <h2>Load Demand (24h)</h2>
+                    
+                    <div class="input-group">
+                        <label>Enter 24 hourly values (kW), comma-separated</label>
+                        <textarea id="load-input" rows="5" placeholder="5.5, 6.0, 7.5, 8.0, 6.5, 5.0, ... (24 values)"></textarea>
+                    </div>
+                    
+                    <button class="btn-primary" onclick="generateSampleLoad()">
+                        🎲 Generate Sample Load
+                    </button>
+                    <button class="btn-success" onclick="validateLoadData()">
+                        ✓ Validate Data
+                    </button>
+                    
+                    <div id="load-alert" style="margin-top: 15px;"></div>
+                </div>
+            </div>
+            
+            <div class="grid-2">
+                <!-- Tariff Input -->
+                <div class="card">
+                    <h2>Electricity Tariff (Optional)</h2>
+                    
+                    <div class="input-group">
+                        <label>Import Prices ($/kWh), 24 values</label>
+                        <textarea id="tariff-import" rows="3" placeholder="0.15, 0.15, 0.15, ... (24 values)"></textarea>
+                    </div>
+                    
+                    <div class="input-group">
+                        <label>Export Prices ($/kWh), 24 values</label>
+                        <textarea id="tariff-export" rows="3" placeholder="0.05, 0.05, 0.05, ... (24 values)"></textarea>
+                    </div>
+                    
+                    <button class="btn-primary" onclick="generateDefaultTariff()">
+                        🎯 Use Default Tariff
+                    </button>
+                    
+                    <div id="tariff-alert" style="margin-top: 15px;"></div>
+                </div>
+                
+                <!-- Battery Configuration -->
+                <div class="card">
+                    <h2>Battery Configuration</h2>
+                    
+                    <div class="grid-2">
+                        <div class="input-group">
+                            <label>Capacity (kWh)</label>
+                            <input type="number" id="bat-capacity" value="100" step="10">
+                        </div>
+                        
+                        <div class="input-group">
+                            <label>Initial SOC (%)</label>
+                            <input type="number" id="bat-soc-init" value="50" min="0" max="100">
+                        </div>
+                        
+                        <div class="input-group">
+                            <label>Max Charge (kW)</label>
+                            <input type="number" id="bat-charge-max" value="25" step="5">
+                        </div>
+                        
+                        <div class="input-group">
+                            <label>Max Discharge (kW)</label>
+                            <input type="number" id="bat-discharge-max" value="25" step="5">
+                        </div>
+                        
+                        <div class="input-group">
+                            <label>SOC Min (%)</label>
+                            <input type="number" id="bat-soc-min" value="20" min="0" max="100">
+                        </div>
+                        
+                        <div class="input-group">
+                            <label>SOC Max (%)</label>
+                            <input type="number" id="bat-soc-max" value="90" min="0" max="100">
+                        </div>
+                    </div>
+                    
+                    <button class="btn-success" onclick="updateBatteryConfig()">
+                        💾 Save Battery Config
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Optimization Tab -->
+        <div id="optimization-tab" class="tab-content">
+            <div class="card">
+                <h2>Run Battery Optimization</h2>
+                
+                <div id="opt-status" class="alert alert-info">
+                    Enter load demand data in the "Data Input" tab, then click "Run Optimization" below.
+                </div>
+                
+                <button class="btn-success" onclick="runOptimization()" style="font-size: 1.2em; padding: 15px 30px;">
+                    ⚡ Run Optimization
+                </button>
+                
+                <div id="opt-results" style="display: none; margin-top: 30px;">
+                    <h3>Optimization Results</h3>
+                    
+                    <div class="grid-3">
+                        <div class="metric-card">
+                            <div class="metric-label">Total Cost</div>
+                            <div class="metric-value">$<span id="opt-cost">0</span></div>
+                        </div>
+                        <div class="metric-card" style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);">
+                            <div class="metric-label">Grid Import</div>
+                            <div class="metric-value"><span id="opt-import">0</span> kWh</div>
+                        </div>
+                        <div class="metric-card" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                            <div class="metric-label">Grid Export</div>
+                            <div class="metric-value"><span id="opt-export">0</span> kWh</div>
+                        </div>
+                    </div>
+                    
+                    <h3 style="margin-top: 30px;">Power Flow</h3>
+                    <div class="chart-container">
+                        <canvas id="powerFlowChart"></canvas>
+                    </div>
+                    
+                    <h3 style="margin-top: 30px;">Battery Schedule</h3>
+                    <div class="chart-container">
+                        <canvas id="batteryChart"></canvas>
+                    </div>
+                    
+                    <h3 style="margin-top: 30px;">State of Charge</h3>
+                    <div class="chart-container">
+                        <canvas id="socChart"></canvas>
+                    </div>
+                    
+                    <h3 style="margin-top: 30px;">Hourly Schedule</h3>
+                    <div style="max-height: 500px; overflow-y: auto;">
+                        <table id="schedule-table">
+                            <thead>
+                                <tr>
+                                    <th>Hour</th>
+                                    <th>Solar (kW)</th>
+                                    <th>Load (kW)</th>
+                                    <th>Charge (kW)</th>
+                                    <th>Discharge (kW)</th>
+                                    <th>Import (kW)</th>
+                                    <th>Export (kW)</th>
+                                    <th>SOC (%)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="schedule-tbody"></tbody>
+                        </table>
+                    </div>
+                    
+                    <button class="btn-success" onclick="downloadSchedule()">
+                        💾 Download Schedule CSV
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- System Status Tab -->
+        <div id="system-tab" class="tab-content">
+            <div class="card">
+                <h2>System Status</h2>
+                
+                <table>
+                    <tr>
+                        <td><strong>Solar Prediction API</strong></td>
+                        <td>
+                            <span class="status-indicator status-offline" id="solar-api-status"></span>
+                            <span id="solar-api-text">Checking...</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>Optimization API</strong></td>
+                        <td>
+                            <span class="status-indicator status-offline" id="opt-api-status"></span>
+                            <span id="opt-api-text">Checking...</span>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>System Initialized</strong></td>
+                        <td id="system-init">No</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Last Solar Update</strong></td>
+                        <td id="last-solar-update">Never</td>
+                    </tr>
+                </table>
+                
+                <button class="btn-primary" onclick="checkSystemStatus()">🔄 Refresh Status</button>
+            </div>
+            
+            <div class="card">
+                <h2>Quick Start Guide</h2>
+                
+                <div class="alert alert-info">
+                    <strong>Step 1:</strong> Initialize solar prediction system with historical data<br>
+                    <strong>Step 2:</strong> Enter load demand in "Data Input" tab<br>
+                    <strong>Step 3:</strong> Configure battery parameters (optional)<br>
+                    <strong>Step 4:</strong> Run optimization in "Optimization" tab<br>
+                    <strong>Step 5:</strong> View and download results
+                </div>
+                
+                <h3>Sample Data</h3>
+                <button class="btn-primary" onclick="loadAllSampleData()">
+                    📦 Load All Sample Data
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // ====================================
+        // Auto-detect API URLs for AWS/Local
+        // ====================================
+        // For local development: http://localhost:8000 and http://localhost:8001
+        // For AWS: Use environment variables set in index.html or via window.__ENV
+        // For same-host deployment: Use /api/solar and /api/opt paths
+        
+        function getApiUrls() {
+            const hostname = window.location.hostname;
+            const protocol = window.location.protocol;
+            
+            // Check if environment variables are set (via index.html or deployment config)
+            if (typeof window.__ENV !== 'undefined') {
+                return {
+                    solar: window.__ENV.SOLAR_API || 'http://localhost:8000',
+                    opt: window.__ENV.OPT_API || 'http://localhost:8001'
+                };
+            }
+            
+            // Auto-detect based on hostname
+            if (hostname === 'localhost' || hostname === '127.0.0.1') {
+                // Local development
+                return {
+                    solar: 'http://localhost:8000',
+                    opt: 'http://localhost:8001'
+                };
+            } else {
+                // AWS or cloud deployment
+                // Option 1: If running as single merged app on same host
+                const origin = `${protocol}//${window.location.host}`;
+                return {
+                    solar: `${origin}/api/solar`,
+                    opt: `${origin}/api/opt`
+                };
+            }
+        }
+        
+        const apis = getApiUrls();
+        const API_SOLAR = apis.solar;
+        const API_OPT = apis.opt;
+        
+        // Charts
+        let solarChart, powerFlowChart, batteryChart, socChart;
+        let optimizationResults = null;
+        
+        // Initialize
+        window.onload = function() {
+            initializeCharts();
+            setCurrentTime();
+            checkSystemStatus();
+            refreshSolarPredictions();
+            
+            // Auto-refresh
+            setInterval(checkSystemStatus, 30000);
+        };
+        
+        // Tab switching
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            
+            event.target.classList.add('active');
+            document.getElementById(tabId).classList.add('active');
+        }
+        
+        // Initialize charts
+        function initializeCharts() {
+            // Solar Chart
+            const ctxSolar = document.getElementById('solarChart').getContext('2d');
+            solarChart = new Chart(ctxSolar, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Solar Power (W)',
+                        data: [],
+                        borderColor: '#f39c12',
+                        backgroundColor: 'rgba(243, 156, 18, 0.1)',
+                        borderWidth: 3,
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { beginAtZero: true, title: { display: true, text: 'Power (W)' } }
+                    }
+                }
+            });
+            
+            // Power Flow Chart
+            const ctxPower = document.getElementById('powerFlowChart').getContext('2d');
+            powerFlowChart = new Chart(ctxPower, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Solar (kW)',
+                        data: [],
+                        backgroundColor: '#f39c12',
+                        type: 'line',
+                        borderWidth: 2,
+                        order: 0
+                    }, {
+                        label: 'Load (kW)',
+                        data: [],
+                        backgroundColor: '#e74c3c',
+                        type: 'line',
+                        borderWidth: 2,
+                        order: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { beginAtZero: true, title: { display: true, text: 'Power (kW)' } }
+                    }
+                }
+            });
+            
+            // Battery Chart
+            const ctxBattery = document.getElementById('batteryChart').getContext('2d');
+            batteryChart = new Chart(ctxBattery, {
+                type: 'bar',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Charge (kW)',
+                        data: [],
+                        backgroundColor: '#2ecc71'
+                    }, {
+                        label: 'Discharge (kW)',
+                        data: [],
+                        backgroundColor: '#e67e22'
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { beginAtZero: true, title: { display: true, text: 'Power (kW)' } }
+                    }
+                }
+            });
+            
+            // SOC Chart
+            const ctxSOC = document.getElementById('socChart').getContext('2d');
+            socChart = new Chart(ctxSOC, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'State of Charge (%)',
+                        data: [],
+                        borderColor: '#9b59b6',
+                        backgroundColor: 'rgba(155, 89, 182, 0.1)',
+                        borderWidth: 3,
+                        tension: 0.4,
+                        fill: true
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { min: 0, max: 100, title: { display: true, text: 'SOC (%)' } }
+                    }
+                }
+            });
+        }
+        
+        // Set current time
+        function setCurrentTime() {
+            const now = new Date();
+            now.setMinutes(0, 0, 0);
+            document.getElementById('rt-timestamp').value = now.toISOString().slice(0, 16);
+        }
+        
+        // Check system status
+        async function checkSystemStatus() {
+            // Solar API
+            try {
+                const response = await fetch(`${API_SOLAR}/status`);
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('solar-api-status').className = 'status-indicator status-online';
+                    document.getElementById('solar-api-text').textContent = 'Online';
+                    document.getElementById('system-init').textContent = data.initialized ? 'Yes' : 'No';
+                    if (data.last_update) {
+                        document.getElementById('last-solar-update').textContent = new Date(data.last_update).toLocaleString();
+                    }
+                } else { document.getElementById('solar-api-status').className = 'status-indicator status-offline';
+                    document.getElementById('solar-api-text').textContent = 'Error';
+                }
+            } catch {
+                document.getElementById('solar-api-status').className = 'status-indicator status-offline';
+                document.getElementById('solar-api-text').textContent = 'Offline';
+            }
+            
+            // Optimization API
+            try {
+                const response = await fetch(`${API_OPT}/status`);
+                if (response.ok) {
+                    document.getElementById('opt-api-status').className = 'status-indicator status-online';
+                    document.getElementById('opt-api-text').textContent = 'Online';
+                } else {
+                    document.getElementById('opt-api-status').className = 'status-indicator status-offline';
+                    document.getElementById('opt-api-text').textContent = 'Error';
+                }
+            } catch {
+                document.getElementById('opt-api-status').className = 'status-indicator status-offline';
+                document.getElementById('opt-api-text').textContent = 'Offline';
+            }
+        }
+        
+        // Refresh solar predictions
+        async function refreshSolarPredictions() {
+            try {
+                const response = await fetch(`${API_SOLAR}/predict`);
+                const data = await response.json();
+                
+                document.getElementById('solar-mean').textContent = data.mean_power.toFixed(0);
+                document.getElementById('solar-peak').textContent = data.max_power.toFixed(0);
+                document.getElementById('solar-energy').textContent = data.total_energy_kwh.toFixed(2);
+                
+                const labels = data.timestamps.map((ts, i) => `H${i}`);
+                solarChart.data.labels = labels;
+                solarChart.data.datasets[0].data = data.predictions;
+                solarChart.update();
+                
+            } catch (error) {
+                console.error('Failed to refresh solar predictions:', error);
+            }
+        }
+        
+        // Add real-time solar measurement
+        async function addRealtimeSolarMeasurement() {
+            const timestamp = document.getElementById('rt-timestamp').value;
+            const power = parseFloat(document.getElementById('rt-power').value);
+            
+            if (!timestamp || isNaN(power)) {
+                showAlert('rt-alert', 'Please enter valid timestamp and power', 'warning');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_SOLAR}/update/realtime`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ timestamp, power })
+                });
+                
+                if (response.ok) {
+                    showAlert('rt-alert', 'Measurement added successfully!', 'success');
+                    document.getElementById('rt-power').value = '';
+                    
+                    // Set next hour
+                    const nextHour = new Date(timestamp);
+                    nextHour.setHours(nextHour.getHours() + 1);
+                    document.getElementById('rt-timestamp').value = nextHour.toISOString().slice(0, 16);
+                    
+                    refreshSolarPredictions();
+                } else {
+                    const error = await response.json();
+                    showAlert('rt-alert', `Error: ${error.detail}`, 'warning');
+                }
+            } catch (error) {
+                showAlert('rt-alert', `Error: ${error.message}`, 'warning');
+            }
+        }
+        
+        // Generate sample load
+        function generateSampleLoad() {
+            const load = [];
+            for (let h = 0; h < 24; h++) {
+                let baseLoad;
+                if (h >= 6 && h <= 9) baseLoad = 8.0;  // Morning peak
+                else if (h >= 17 && h <= 22) baseLoad = 12.0;  // Evening peak
+                else if (h >= 10 && h <= 16) baseLoad = 5.0;  // Daytime
+                else baseLoad = 3.0;  // Night
+                
+                load.push((baseLoad + Math.random() * 2 - 1).toFixed(2));
+            }
+            
+            document.getElementById('load-input').value = load.join(', ');
+            showAlert('load-alert', 'Sample load generated (24 hours)', 'success');
+        }
+        
+        // Validate load data
+        function validateLoadData() {
+            const input = document.getElementById('load-input').value;
+            const values = input.split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v));
+            
+            if (values.length === 24) {
+                showAlert('load-alert', `✓ Valid: ${values.length} hourly values`, 'success');
+                return true;
+            } else {
+                showAlert('load-alert', `⚠ Invalid: Found ${values.length} values, need 24`, 'warning');
+                return false;
+            }
+        }
+        
+        // Generate default tariff
+        async function generateDefaultTariff() {
+            try {
+                const response = await fetch(`${API_OPT}/tariff/default?hours=24`);
+                const data = await response.json();
+                
+                const importPrices = data.tariff.map(t => t.import_price);
+                const exportPrices = data.tariff.map(t => t.export_price);
+                
+                document.getElementById('tariff-import').value = importPrices.join(', ');
+                document.getElementById('tariff-export').value = exportPrices.join(', ');
+                
+                showAlert('tariff-alert', 'Default Time-of-Use tariff loaded', 'success');
+            } catch (error) {
+                showAlert('tariff-alert', `Error: ${error.message}`, 'warning');
+            }
+        }
+        
+        // Update battery config
+        async function updateBatteryConfig() {
+            const config = {
+                E_capacity: parseFloat(document.getElementById('bat-capacity').value),
+                SOC_min: parseFloat(document.getElementById('bat-soc-min').value),
+                SOC_max: parseFloat(document.getElementById('bat-soc-max').value),
+                SOC_initial: parseFloat(document.getElementById('bat-soc-init').value),
+                P_charge_max: parseFloat(document.getElementById('bat-charge-max').value),
+                P_discharge_max: parseFloat(document.getElementById('bat-discharge-max').value),
+                eta_charge: 0.95,
+                eta_discharge: 0.95
+            };
+            
+            try {
+                const response = await fetch(`${API_OPT}/config/battery`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+                
+                if (response.ok) {
+                    alert('Battery configuration updated successfully!');
+                }
+            } catch (error) {
+                alert(`Error updating battery config: ${error.message}`);
+            }
+        }
+        
+        // Run optimization
+        async function runOptimization() {
+            // Validate load data
+            const loadInput = document.getElementById('load-input').value;
+            const loadValues = loadInput.split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v));
+            
+            if (loadValues.length !== 24) {
+                showAlert('opt-status', 'Please enter 24 hourly load values in the Data Input tab', 'warning');
+                return;
+            }
+            
+            showAlert('opt-status', 'Running optimization... Please wait.', 'info');
+            
+            // Get tariff data (optional)
+            const tariffImportInput = document.getElementById('tariff-import').value;
+            const tariffExportInput = document.getElementById('tariff-export').value;
+            
+            let tariffImport = null;
+            let tariffExport = null;
+            
+            if (tariffImportInput && tariffExportInput) {
+                tariffImport = tariffImportInput.split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v));
+                tariffExport = tariffExportInput.split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v));
+                
+                if (tariffImport.length !== 24 || tariffExport.length !== 24) {
+                    tariffImport = null;
+                    tariffExport = null;
+                }
+            }
+            
+            // Get battery config
+            const batteryConfig = {
+                E_capacity: parseFloat(document.getElementById('bat-capacity').value),
+                SOC_min: parseFloat(document.getElementById('bat-soc-min').value),
+                SOC_max: parseFloat(document.getElementById('bat-soc-max').value),
+                SOC_initial: parseFloat(document.getElementById('bat-soc-init').value),
+                P_charge_max: parseFloat(document.getElementById('bat-charge-max').value),
+                P_discharge_max: parseFloat(document.getElementById('bat-discharge-max').value),
+                eta_charge: 0.95,
+                eta_discharge: 0.95
+            };
+            
+            // Build request
+            const request = {
+                load_demand: loadValues,
+                tariff_import: tariffImport,
+                tariff_export: tariffExport,
+                battery_config: batteryConfig,
+                hours: 24
+            };
+            
+            try {
+                const response = await fetch(`${API_OPT}/optimize`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(request)
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    showAlert('opt-status', `Optimization failed: ${error.detail}`, 'warning');
+                    return;
+                }
+                
+                const data = await response.json();
+                optimizationResults = data;
+                
+                displayOptimizationResults(data);
+                showAlert('opt-status', 'Optimization completed successfully!', 'success');
+                
+            } catch (error) {
+                showAlert('opt-status', `Error: ${error.message}`, 'warning');
+            }
+        }
+        
+        // Display optimization results
+        function displayOptimizationResults(data) {
+            document.getElementById('opt-results').style.display = 'block';
+            
+            // Update metrics
+            document.getElementById('opt-cost').textContent = data.total_cost.toFixed(2);
+            document.getElementById('opt-import').textContent = data.summary.total_import_kwh.toFixed(2);
+            document.getElementById('opt-export').textContent = data.summary.total_export_kwh.toFixed(2);
+            
+            // Update charts
+            const labels = data.schedule.map((_, i) => `H${i}`);
+            
+            // Power flow chart
+            powerFlowChart.data.labels = labels;
+            powerFlowChart.data.datasets[0].data = data.solar_forecast;
+            powerFlowChart.data.datasets[1].data = data.load_forecast;
+            powerFlowChart.update();
+            
+            // Battery chart
+            batteryChart.data.labels = labels;
+            batteryChart.data.datasets[0].data = data.schedule.map(s => s.P_charge);
+            batteryChart.data.datasets[1].data = data.schedule.map(s => s.P_discharge);
+            batteryChart.update();
+            
+            // SOC chart
+            socChart.data.labels = labels;
+            socChart.data.datasets[0].data = data.schedule.map(s => s.SOC);
+            socChart.update();
+            
+            // Table
+            const tbody = document.getElementById('schedule-tbody');
+            tbody.innerHTML = '';
+            
+            data.schedule.forEach((item, i) => {
+                const row = tbody.insertRow();
+                row.innerHTML = `
+                    <td>${i}</td>
+                    <td>${data.solar_forecast[i].toFixed(2)}</td>
+                    <td>${data.load_forecast[i].toFixed(2)}</td>
+                    <td>${item.P_charge.toFixed(2)}</td>
+                    <td>${item.P_discharge.toFixed(2)}</td>
+                    <td>${item.P_import.toFixed(2)}</td>
+                    <td>${item.P_export.toFixed(2)}</td>
+                    <td>${item.SOC.toFixed(1)}</td>
+                `;
+            });
+        }
+        
+        // Download schedule
+        function downloadSchedule() {
+            if (!optimizationResults) {
+                alert('No optimization results to download');
+                return;
+            }
+            
+            let csv = 'Hour,Solar(kW),Load(kW),Charge(kW),Discharge(kW),Import(kW),Export(kW),SOC(%)\n';
+            
+            optimizationResults.schedule.forEach((item, i) => {
+                csv += `${i},${optimizationResults.solar_forecast[i].toFixed(2)},`;
+                csv += `${optimizationResults.load_forecast[i].toFixed(2)},`;
+                csv += `${item.P_charge.toFixed(2)},${item.P_discharge.toFixed(2)},`;
+                csv += `${item.P_import.toFixed(2)},${item.P_export.toFixed(2)},`;
+                csv += `${item.SOC.toFixed(1)}\n`;
+            });
+            
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `battery_schedule_${new Date().toISOString().slice(0,10)}.csv`;
+            a.click();
+        }
+        
+        // Load all sample data
+        function loadAllSampleData() {
+            generateSampleLoad();
+            generateDefaultTariff();
+            alert('Sample data loaded! You can now run optimization.');
+        }
+        
+        // Show alert
+        function showAlert(elementId, message, type) {
+            const alertDiv = document.getElementById(elementId);
+            alertDiv.className = `alert alert-${type}`;
+            alertDiv.textContent = message;
+            alertDiv.style.display = 'block';
+        }
+    </script>
+</body>
+</html>

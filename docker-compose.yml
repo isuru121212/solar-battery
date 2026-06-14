@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+
+  solar-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn main_solar_api:app --host 0.0.0.0 --port 8000 --workers 2
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models:ro
+      - ./data:/app/data:ro
+    environment:
+      - USE_S3=false          # set to true + add S3_BUCKET to use S3
+      # - S3_BUCKET=your-bucket-name
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  optimization-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: uvicorn optimization_api:app --host 0.0.0.0 --port 8001 --workers 2
+    ports:
+      - "8001:8001"
+    environment:
+      - SOLAR_API_URL=http://solar-api:8000   # service name resolves inside Docker network
+    depends_on:
+      solar-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
