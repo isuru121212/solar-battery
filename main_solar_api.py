@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 from datetime import timedelta
@@ -451,6 +452,18 @@ class RealtimeUpdate(BaseModel):
 # ===========================
 @app.get("/")
 def home():
+    dashboard = BASE_DIR / "complete_dashboard.html"
+    if dashboard.exists():
+        return FileResponse(str(dashboard), media_type="text/html")
+    return {
+        "message": "Solar Power Prediction API",
+        "status": "online",
+        "window_size": f"{sequence_length}h",
+        "mode": "AWS/S3" if USE_S3 else "local"
+    }
+
+@app.get("/api")
+def api_info():
     return {
         "message": "Solar Power Prediction API",
         "status": "online",
