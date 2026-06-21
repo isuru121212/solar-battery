@@ -116,14 +116,43 @@ def load_legacy_keras_model(model_path):
         with open(config_file, 'r') as f:
             model_config = json.load(f)
 
+        # Keras 3 → Keras 2 module path remapping
+        MODULE_MAP = {
+            'keras.src.engine.functional':      'keras.engine.functional',
+            'keras.src.layers.core.input_layer':'keras.layers',
+            'keras.src.layers.convolutional.conv1d': 'keras.layers',
+            'keras.src.layers.pooling.max_pooling1d': 'keras.layers',
+            'keras.src.layers.regularization.dropout': 'keras.layers',
+            'keras.src.layers.rnn.lstm':        'keras.layers',
+            'keras.src.layers.core.dense':      'keras.layers',
+            'keras.src.initializers.glorot_uniform': 'keras.initializers',
+            'keras.src.initializers.constant':  'keras.initializers',
+            'keras.src.initializers.zeros':     'keras.initializers',
+            'keras.src.initializers.orthogonal':'keras.initializers',
+            'keras.src.regularizers.l2':        'keras.regularizers',
+            'keras.src.optimizers.adam':        'keras.optimizers',
+        }
+
         def fix_config(obj):
             if isinstance(obj, dict):
+                # Fix Keras3 module paths → Keras2
+                if 'module' in obj and isinstance(obj['module'], str):
+                    obj['module'] = MODULE_MAP.get(obj['module'], obj['module'])
+                # Remove registered_name (Keras3 only, causes errors in Keras2)
+                obj.pop('registered_name', None)
+                # Fix batch_shape → batch_input_shape
                 if 'batch_shape' in obj:
                     obj['batch_input_shape'] = obj.pop('batch_shape')
+                # Fix DTypePolicy dtype object → string
                 if isinstance(obj.get('dtype'), dict):
                     dp = obj['dtype']
                     if dp.get('class_name') == 'DTypePolicy':
                         obj['dtype'] = dp.get('config', {}).get('name', 'float32')
+                # Remove build_config and compile_config (Keras3 only)
+                obj.pop('build_config', None)
+                obj.pop('compile_config', None)
+                # Remove shared_object_id (causes Keras2 deserialization errors)
+                obj.pop('shared_object_id', None)
                 for v in list(obj.values()):
                     fix_config(v)
             elif isinstance(obj, list):
@@ -131,6 +160,7 @@ def load_legacy_keras_model(model_path):
                     fix_config(item)
 
         fix_config(model_config)
+        logger.info(f"Patched config top-level class: {model_config.get('class_name')} module: {model_config.get('module')}")
 
         # Build model from patched config
         model = keras.models.model_from_json(json.dumps(model_config))
