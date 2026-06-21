@@ -33,10 +33,10 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "")
 MODEL_DIR = Path("/tmp/models") if USE_S3 else BASE_DIR / "models"
 DATA_DIR  = Path("/tmp/data")   if USE_S3 else BASE_DIR / "data" / "historical"
 
-MODEL_PATH           = str(MODEL_DIR / "final_model_20250928_225759.keras")
-CONFIG_PATH          = str(MODEL_DIR / "model_config_20250928_225800.json")
-SCALER_FEATURES_PATH = str(MODEL_DIR / "scaler_features_20250928_225800.pkl")
-SCALER_TARGET_PATH   = str(MODEL_DIR / "scaler_target_20250928_225800.pkl")
+MODEL_PATH           = str(MODEL_DIR / "final_model_20260621_192314.keras")
+CONFIG_PATH          = str(MODEL_DIR / "model_config_20260621_192314.json")
+SCALER_FEATURES_PATH = str(MODEL_DIR / "scaler_features_20260621_192314.pkl")
+SCALER_TARGET_PATH   = str(MODEL_DIR / "scaler_target_20260621_192314.pkl")
 HISTORICAL_CSV_PATH  = str(DATA_DIR  / "historical_solar_data.csv")
 
 LATITUDE  = 9.67
@@ -400,6 +400,26 @@ def create_all_features(df):
 
     return df
 
+def apply_solar_constraints(predictions, start_time):
+    """Force predictions to zero when sun is below horizon, taper near sunrise/sunset."""
+    constrained = predictions.copy()
+    lat_rad = np.radians(LATITUDE)
+    for i in range(len(constrained)):
+        ts = start_time + timedelta(hours=i + 1)
+        hour = ts.hour
+        day_of_year = ts.timetuple().tm_yday
+        decl = 23.45 * np.sin(np.radians(360 * (284 + day_of_year) / 365))
+        hour_angle = 15 * (hour - 12)
+        sin_elev = (np.sin(np.radians(decl)) * np.sin(lat_rad) +
+                    np.cos(np.radians(decl)) * np.cos(lat_rad) *
+                    np.cos(np.radians(hour_angle)))
+        elevation = np.degrees(np.arcsin(np.clip(sin_elev, -1, 1)))
+        if elevation <= 0:
+            constrained[i] = 0.0
+        elif elevation < 5:
+            constrained[i] *= (elevation / 5) * 0.1
+    return constrained
+
 def make_prediction(window_df):
     X_all = np.zeros((len(window_df), len(ALL_TRAINING_FEATURES)))
     for i, feature_name in enumerate(ALL_TRAINING_FEATURES):
@@ -416,6 +436,7 @@ def make_prediction(window_df):
     pred_scaled= model.predict(X_seq, verbose=0)
     predictions= scaler_target.inverse_transform(pred_scaled.reshape(-1, 1)).flatten()
     predictions= np.maximum(0, predictions)
+    predictions= apply_solar_constraints(predictions, window_df['datetime'].max())
     return predictions
 
 # ===========================
@@ -584,6 +605,57 @@ async def proxy_optimization(path: str, request: Request):
     except Exception as e:
         logger.error(f"Proxy error: {e}")
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/backtest")
+def get_backtest_results():
+    """Return pre-computed backtest accuracy metrics and per-hour breakdown."""
+    csv_path = BASE_DIR / "backtest_results.csv"
+    if not csv_path.exists():
+        raise HTTPException(status_code=404, detail="Backtest results not found. Run backtest.py locally first.")
+
+    df = pd.read_csv(str(csv_path))
+
+    actual    = df["actual_W"].values
+    predicted = df["predicted_W"].values
+    errors    = np.abs(actual - predicted)
+
+    mae  = float(np.mean(errors))
+    rmse = float(np.sqrt(np.mean((actual - predicted) ** 2)))
+    ss_res = np.sum((actual - predicted) ** 2)
+    ss_tot = np.sum((actual - np.mean(actual)) ** 2)
+    r2   = float(1 - ss_res / ss_tot) if ss_tot > 0 else 0.0
+    mask = actual > 10
+    mape = float(np.mean(np.abs((actual[mask] - predicted[mask]) / actual[mask])) * 100) if mask.sum() > 0 else 0.0
+
+    # Per-hour-ahead breakdown
+    per_hour = []
+    for h in range(1, 25):
+        h_df = df[df["predict_hour"] == h]
+        if len(h_df):
+            per_hour.append({
+                "hour_ahead": h,
+                "mae":  round(float(h_df["abs_error_W"].mean()), 2),
+                "rmse": round(float(np.sqrt((h_df["error_W"] ** 2).mean())), 2),
+            })
+
+    # Sample of actual vs predicted (last 48 hours worth)
+    sample = df.tail(48)[["timestamp", "actual_W", "predicted_W", "error_W"]].copy()
+    sample["actual_W"]    = sample["actual_W"].round(2)
+    sample["predicted_W"] = sample["predicted_W"].round(2)
+    sample["error_W"]     = sample["error_W"].round(2)
+
+    return {
+        "overall": {
+            "mae":              round(mae, 2),
+            "rmse":             round(rmse, 2),
+            "r2":               round(r2, 4),
+            "mape_percent":     round(mape, 2),
+            "total_predictions": int(len(df)),
+        },
+        "per_hour_ahead": per_hour,
+        "sample_predictions": sample.to_dict(orient="records"),
+    }
 
 
 if __name__ == "__main__":

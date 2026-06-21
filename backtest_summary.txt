@@ -1,0 +1,18 @@
+BACKTEST SUMMARY
+========================================
+Dataset: F:\research papers\isuru\New folder (6)\hourly_solar_power_imputed original_new.csv
+Total rows: 8805
+Date range: 2015-07-02 11:00:00 to 2016-07-03 07:00:00
+Steps run: 8733
+Step size: 1h
+
+--- All hours ---
+MAE  : 656.49 W
+RMSE : 1225.44 W
+R2   : 0.8574
+
+--- Daytime only (actual > 100W) ---
+MAE  : 1260.97 W
+RMSE : 1699.05 W
+R2   : 0.7214
+MAPE : 67.47%
