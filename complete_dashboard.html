@@ -555,12 +555,12 @@
                     opt: 'http://localhost:8001'
                 };
             } else {
-                // AWS or cloud deployment
-                // Option 1: If running as single merged app on same host
+                // Railway / cloud deployment — single public URL
+                // Solar API is at root; Optimization API is proxied under /opt
                 const origin = `${protocol}//${window.location.host}`;
                 return {
-                    solar: `${origin}/api/solar`,
-                    opt: `${origin}/api/opt`
+                    solar: origin,
+                    opt: `${origin}/opt`
                 };
             }
         }

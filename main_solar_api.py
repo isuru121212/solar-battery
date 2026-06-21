@@ -1,15 +1,16 @@
-from fastapi import FastAPI, HTTPException
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional, List, Dict
-from datetime import datetime, timedelta
+from datetime import timedelta
 import pandas as pd
 import numpy as np
 import joblib
 import os
 import json
 import logging
-import requests
 from pathlib import Path
 from tensorflow import keras
 
@@ -74,65 +75,73 @@ if USE_S3:
     download_from_s3()
 
 def load_legacy_keras_model(model_path):
-    """Load Keras model with compatibility handling."""
+    """Load Keras model, patching legacy batch_shape → shape when needed."""
+    import zipfile
+    import tempfile
+
     try:
-        # Try standard loading first
         return keras.models.load_model(model_path, compile=False)
-    except (ValueError, TypeError, ImportError) as e:
-        # Fallback for compatibility issues
-        logger.warning(f"Standard loading failed: {str(e)}, attempting compatibility load...")
-        
-        import zipfile
-        import tempfile
-        import shutil
-        
-        # Try extracting and re-saving the model
-        try:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                with zipfile.ZipFile(model_path, 'r') as zf:
-                    zf.extractall(tmpdir)
-                
-                # Read model config
-                model_json_path = os.path.join(tmpdir, 'model.json')
-                if os.path.exists(model_json_path):
-                    with open(model_json_path, 'r') as f:
-                        model_config = json.load(f)
-                    
-                    # Fix batch_shape if present
-                    def fix_batch_shape(obj):
-                        if isinstance(obj, dict):
-                            if 'batch_shape' in obj:
-                                batch_shape = obj.pop('batch_shape')
-                                if isinstance(batch_shape, list) and len(batch_shape) > 1:
-                                    obj['shape'] = batch_shape[1:]
-                            for v in obj.values():
-                                fix_batch_shape(v)
-                        elif isinstance(obj, list):
-                            for item in obj:
-                                fix_batch_shape(item)
-                    
-                    fix_batch_shape(model_config)
-                    
-                    # Save fixed config
-                    with open(model_json_path, 'w') as f:
-                        json.dump(model_config, f)
-                
-                # Create temporary fixed model
-                fixed_model_path = model_path + '.fixed'
-                with zipfile.ZipFile(fixed_model_path, 'w') as zf:
-                    for root, dirs, files in os.walk(tmpdir):
-                        for file in files:
-                            file_path = os.path.join(root, file)
-                            arcname = os.path.relpath(file_path, tmpdir)
-                            zf.write(file_path, arcname)
-                
-                # Load and return
-                model = keras.models.load_model(fixed_model_path, compile=False)
-                os.remove(fixed_model_path)
-                return model
-        except Exception as fallback_error:
-            logger.error(f"Compatibility load also failed: {str(fallback_error)}")
+    except Exception as e:
+        if 'batch_shape' not in str(e):
             raise
+        logger.warning("Legacy batch_shape detected — patching model config...")
+
+    # The .keras file is a zip; extract, patch config, rebuild with .keras extension
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with zipfile.ZipFile(model_path, 'r') as zf:
+            zf.extractall(tmpdir)
+            zip_names = zf.namelist()
+
+        logger.info(f"Keras zip contents: {zip_names}")
+
+        # Keras 2 uses model.json, Keras 3 uses config.json
+        config_file = None
+        for candidate in ('model.json', 'config.json'):
+            candidate_path = os.path.join(tmpdir, candidate)
+            if os.path.exists(candidate_path):
+                config_file = candidate_path
+                break
+
+        if config_file is None:
+            raise FileNotFoundError(
+                f"No model config found in .keras zip. Contents: {zip_names}"
+            )
+
+        with open(config_file, 'r') as f:
+            model_config = json.load(f)
+
+        def fix_keras3_config(obj):
+            if isinstance(obj, dict):
+                # Fix 1: batch_shape → batch_input_shape (Keras 3 InputLayer → Keras 2)
+                if 'batch_shape' in obj:
+                    obj['batch_input_shape'] = obj.pop('batch_shape')
+                # Fix 2: DTypePolicy dict → plain string (Keras 3 → Keras 2)
+                if isinstance(obj.get('dtype'), dict):
+                    dtype_obj = obj['dtype']
+                    if dtype_obj.get('class_name') == 'DTypePolicy':
+                        obj['dtype'] = dtype_obj.get('config', {}).get('name', 'float32')
+                for v in list(obj.values()):
+                    fix_keras3_config(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    fix_keras3_config(item)
+
+        fix_keras3_config(model_config)
+
+        with open(config_file, 'w') as f:
+            json.dump(model_config, f)
+
+        # Must end in .keras so Keras treats the file as a zip, not HDF5
+        fixed_path = os.path.join(tmpdir, 'fixed.keras')
+        with zipfile.ZipFile(fixed_path, 'w') as zf:
+            for root, _, files in os.walk(tmpdir):
+                for fname in files:
+                    fp = os.path.join(root, fname)
+                    if fp == fixed_path:
+                        continue
+                    zf.write(fp, os.path.relpath(fp, tmpdir))
+
+        return keras.models.load_model(fixed_path, compile=False)
 
 logger.info("Loading models...")
 try:
@@ -355,7 +364,12 @@ def make_prediction(window_df):
 # ===========================
 # FASTAPI APP
 # ===========================
-app = FastAPI(title="Solar Power Prediction API")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    auto_initialize()
+    yield
+
+app = FastAPI(title="Solar Power Prediction API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -364,11 +378,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Run auto-init when the app starts
-@app.on_event("startup")
-async def startup_event():
-    auto_initialize()
 
 # ===========================
 # PYDANTIC MODELS
@@ -471,6 +480,43 @@ async def get_predictions():
         logger.error(f"Prediction failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ===========================
+# OPTIMIZATION API PROXY
+# Forwards /opt/* to the internal Optimization API (localhost:8001)
+# so the dashboard only needs one public URL.
+# ===========================
+OPT_INTERNAL_URL = "http://localhost:8001"
+
+@app.api_route("/opt/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def proxy_optimization(path: str, request: Request):
+    import httpx
+    url = f"{OPT_INTERNAL_URL}/{path}"
+    params = dict(request.query_params)
+    try:
+        body = await request.body()
+        headers = {k: v for k, v in request.headers.items()
+                   if k.lower() not in ("host", "content-length")}
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.request(
+                method=request.method,
+                url=url,
+                params=params,
+                content=body,
+                headers=headers,
+            )
+        return Response(
+            content=resp.content,
+            status_code=resp.status_code,
+            headers=dict(resp.headers),
+            media_type=resp.headers.get("content-type"),
+        )
+    except httpx.ConnectError:
+        raise HTTPException(status_code=503, detail="Optimization API not available yet — please retry in a few seconds")
+    except Exception as e:
+        logger.error(f"Proxy error: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
