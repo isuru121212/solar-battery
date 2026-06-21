@@ -75,18 +75,26 @@ if USE_S3:
     download_from_s3()
 
 def load_legacy_keras_model(model_path):
-    """Load Keras model, patching legacy batch_shape → shape when needed."""
+    """
+    Load a Keras 3 .keras file under Keras 2 (TF 2.x).
+
+    Strategy:
+    1. Extract the zip to a temp dir.
+    2. Patch config.json: batch_shape → batch_input_shape, DTypePolicy → string.
+    3. Rebuild the model from the patched config.
+    4. Load weights from model.weights.h5 by_name=True so Keras 2 layer names
+       are matched against the HDF5 group names — tolerant of missing entries.
+    """
     import zipfile
     import tempfile
+    import h5py
 
+    # Fast path: try direct load first (works if saved with same Keras version)
     try:
         return keras.models.load_model(model_path, compile=False)
     except Exception as e:
-        if 'batch_shape' not in str(e):
-            raise
-        logger.warning("Legacy batch_shape detected — patching model config...")
+        logger.warning(f"Direct load failed ({e}), falling back to manual patch...")
 
-    # The .keras file is a zip; extract, patch config, rebuild with .keras extension
     with tempfile.TemporaryDirectory() as tmpdir:
         with zipfile.ZipFile(model_path, 'r') as zf:
             zf.extractall(tmpdir)
@@ -94,54 +102,102 @@ def load_legacy_keras_model(model_path):
 
         logger.info(f"Keras zip contents: {zip_names}")
 
-        # Keras 2 uses model.json, Keras 3 uses config.json
+        # Locate config file (Keras 3 → config.json, Keras 2 → model.json)
         config_file = None
-        for candidate in ('model.json', 'config.json'):
-            candidate_path = os.path.join(tmpdir, candidate)
-            if os.path.exists(candidate_path):
-                config_file = candidate_path
+        for candidate in ('config.json', 'model.json'):
+            p = os.path.join(tmpdir, candidate)
+            if os.path.exists(p):
+                config_file = p
                 break
-
         if config_file is None:
-            raise FileNotFoundError(
-                f"No model config found in .keras zip. Contents: {zip_names}"
-            )
+            raise FileNotFoundError(f"No model config in .keras zip. Contents: {zip_names}")
 
         with open(config_file, 'r') as f:
             model_config = json.load(f)
 
-        def fix_keras3_config(obj):
+        def fix_config(obj):
             if isinstance(obj, dict):
-                # Fix 1: batch_shape → batch_input_shape (Keras 3 InputLayer → Keras 2)
                 if 'batch_shape' in obj:
                     obj['batch_input_shape'] = obj.pop('batch_shape')
-                # Fix 2: DTypePolicy dict → plain string (Keras 3 → Keras 2)
                 if isinstance(obj.get('dtype'), dict):
-                    dtype_obj = obj['dtype']
-                    if dtype_obj.get('class_name') == 'DTypePolicy':
-                        obj['dtype'] = dtype_obj.get('config', {}).get('name', 'float32')
+                    dp = obj['dtype']
+                    if dp.get('class_name') == 'DTypePolicy':
+                        obj['dtype'] = dp.get('config', {}).get('name', 'float32')
                 for v in list(obj.values()):
-                    fix_keras3_config(v)
+                    fix_config(v)
             elif isinstance(obj, list):
                 for item in obj:
-                    fix_keras3_config(item)
+                    fix_config(item)
 
-        fix_keras3_config(model_config)
+        fix_config(model_config)
 
-        with open(config_file, 'w') as f:
-            json.dump(model_config, f)
+        # Build model from patched config
+        model = keras.models.model_from_json(json.dumps(model_config))
+        logger.info("Model architecture rebuilt from patched config.")
 
-        # Must end in .keras so Keras treats the file as a zip, not HDF5
-        fixed_path = os.path.join(tmpdir, 'fixed.keras')
-        with zipfile.ZipFile(fixed_path, 'w') as zf:
-            for root, _, files in os.walk(tmpdir):
-                for fname in files:
-                    fp = os.path.join(root, fname)
-                    if fp == fixed_path:
-                        continue
-                    zf.write(fp, os.path.relpath(fp, tmpdir))
+        # Load weights from the HDF5 weights file by layer name
+        weights_file = os.path.join(tmpdir, 'model.weights.h5')
+        if not os.path.exists(weights_file):
+            # Fallback: look for any .h5 file
+            for fname in os.listdir(tmpdir):
+                if fname.endswith('.h5'):
+                    weights_file = os.path.join(tmpdir, fname)
+                    break
 
-        return keras.models.load_model(fixed_path, compile=False)
+        if os.path.exists(weights_file):
+            logger.info(f"Loading weights from {weights_file}")
+            _load_weights_by_name(model, weights_file)
+        else:
+            logger.warning("No weights file found — model will have random weights")
+
+        return model
+
+
+def _load_weights_by_name(model, weights_path):
+    """
+    Load weights from a Keras 3 model.weights.h5 into a Keras 2 model.
+    Keras 3 stores weights under group paths like 'conv1d/vars/0'.
+    Keras 2 layer.set_weights() expects a list ordered by variable index.
+    """
+    import h5py
+    import numpy as np
+
+    with h5py.File(weights_path, 'r') as f:
+        # Build a flat map: layer_name -> {var_index -> array}
+        weight_map = {}
+
+        def collect(name, obj):
+            if not isinstance(obj, h5py.Dataset):
+                return
+            parts = name.split('/')
+            # Keras 3 path: <layer_name>/vars/<index>
+            # or nested:    <layer_name>/<sublayer>/vars/<index>
+            if 'vars' in parts:
+                vars_idx = parts.index('vars')
+                layer_key = '/'.join(parts[:vars_idx])
+                try:
+                    var_idx = int(parts[vars_idx + 1])
+                except (IndexError, ValueError):
+                    return
+                weight_map.setdefault(layer_key, {})[var_idx] = obj[()]
+
+        f.visititems(collect)
+        logger.info(f"Weight groups found: {list(weight_map.keys())[:10]}")
+
+        for layer in model.layers:
+            lname = layer.name
+            if lname not in weight_map:
+                continue
+            var_dict = weight_map[lname]
+            weights = [var_dict[i] for i in sorted(var_dict.keys())]
+            expected = len(layer.get_weights())
+            if len(weights) != expected:
+                logger.warning(f"Layer '{lname}': expected {expected} weights, got {len(weights)} — skipping")
+                continue
+            try:
+                layer.set_weights(weights)
+            except Exception as e:
+                logger.warning(f"Could not set weights for layer '{lname}': {e}")
 
 logger.info("Loading models...")
 try:
