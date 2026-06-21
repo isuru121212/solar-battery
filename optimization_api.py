@@ -186,7 +186,7 @@ def get_status():
 @app.post("/config/battery")
 async def configure_battery(config: BatteryConfig):
     global BATTERY_CONFIG
-    BATTERY_CONFIG = config.dict()
+    BATTERY_CONFIG = config.model_dump()
     return {"status": "updated", "config": BATTERY_CONFIG}
 
 @app.get("/config/battery")
@@ -227,7 +227,7 @@ async def optimize(request: OptimizationRequest):
         # Battery config
         battery_config = BATTERY_CONFIG.copy()
         if request.battery_config:
-            battery_config.update(request.battery_config.dict())
+            battery_config.update(request.battery_config.model_dump())
 
         # Load demand
         if len(request.load_demand) < request.hours:
@@ -235,14 +235,14 @@ async def optimize(request: OptimizationRequest):
         load_forecast = request.load_demand[:request.hours]
 
         # Align lengths
+        hours = request.hours
         if len(solar_forecast) != len(load_forecast):
-            min_len       = min(len(solar_forecast), len(load_forecast))
-            logger.warning(f"Truncating forecasts to {min_len} hours")
-            solar_forecast= solar_forecast[:min_len]
-            load_forecast = load_forecast[:min_len]
-            tariff_import = tariff_import[:min_len]
-            tariff_export = tariff_export[:min_len]
-            request.hours = min_len
+            hours         = min(len(solar_forecast), len(load_forecast))
+            logger.warning(f"Truncating forecasts to {hours} hours")
+            solar_forecast= solar_forecast[:hours]
+            load_forecast = load_forecast[:hours]
+            tariff_import = tariff_import[:hours]
+            tariff_export = tariff_export[:hours]
 
         # Run optimization
         try:
@@ -252,7 +252,7 @@ async def optimize(request: OptimizationRequest):
                 tariff_import=tariff_import,
                 tariff_export=tariff_export,
                 battery_config=battery_config,
-                hours=request.hours
+                hours=hours
             )
         except Exception as e:
             logger.error(f"Optimization engine error: {e}")
@@ -292,4 +292,4 @@ async def get_default_tariff_endpoint(hours: int = 24):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8001)))
