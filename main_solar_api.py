@@ -200,23 +200,32 @@ def _load_weights_by_name(model, weights_path):
             except Exception as e:
                 logger.warning(f"Could not set weights for layer '{lname}': {e}")
 
-logger.info("Loading models...")
-try:
-    model            = load_legacy_keras_model(MODEL_PATH)
-    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
-    scaler_features  = joblib.load(SCALER_FEATURES_PATH)
-    scaler_target    = joblib.load(SCALER_TARGET_PATH)
+# Globals — populated during lifespan startup so uvicorn binds the port first
+model                    = None
+scaler_features          = None
+scaler_target            = None
+selected_feature_indices = None
+sequence_length          = 48  # default; overwritten after config loads
 
-    with open(CONFIG_PATH, "r") as f:
-        config = json.load(f)
+def _load_all_models():
+    global model, scaler_features, scaler_target, selected_feature_indices, sequence_length
+    logger.info("Loading models...")
+    try:
+        model           = load_legacy_keras_model(MODEL_PATH)
+        model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+        scaler_features = joblib.load(SCALER_FEATURES_PATH)
+        scaler_target   = joblib.load(SCALER_TARGET_PATH)
 
-    selected_feature_indices = config["selected_feature_indices"]
-    sequence_length          = config.get("sequence_length", 48)
+        with open(CONFIG_PATH, "r") as f:
+            config = json.load(f)
 
-    logger.info(f"Models loaded. Sequence: {sequence_length}h")
-except Exception as e:
-    logger.error(f"Failed to load models: {e}")
-    raise
+        selected_feature_indices = config["selected_feature_indices"]
+        sequence_length          = config.get("sequence_length", 48)
+
+        logger.info(f"Models loaded. Sequence: {sequence_length}h")
+    except Exception as e:
+        logger.error(f"Failed to load models: {e}")
+        raise
 
 # All 62 training features
 ALL_TRAINING_FEATURES = [
@@ -444,6 +453,7 @@ def make_prediction(window_df):
 # ===========================
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    _load_all_models()
     auto_initialize()
     yield
 

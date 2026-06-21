@@ -260,6 +260,7 @@
             <button class="tab active" onclick="switchTab('solar-tab')">Solar Predictions</button>
             <button class="tab" onclick="switchTab('input-tab')">Data Input</button>
             <button class="tab" onclick="switchTab('optimization-tab')">Optimization</button>
+            <button class="tab" onclick="switchTab('accuracy-tab'); loadAccuracy()">Model Accuracy</button>
             <button class="tab" onclick="switchTab('system-tab')">System Status</button>
         </div>
         
@@ -475,6 +476,66 @@
             </div>
         </div>
         
+        <!-- Model Accuracy Tab -->
+        <div id="accuracy-tab" class="tab-content">
+            <div class="card">
+                <h2>Model Backtesting Accuracy</h2>
+                <p style="color:#aaa">Sliding window evaluation on the full 1-year dataset — each step uses 48h of real data to predict the next 24h, then compares with actual measured values.</p>
+                <button class="btn-primary" onclick="loadAccuracy()" style="margin-bottom:20px">&#8635; Refresh</button>
+                <div id="accuracy-status" class="alert alert-info" style="display:none"></div>
+
+                <!-- Overall metrics -->
+                <div class="grid-3" id="accuracy-metrics" style="display:none">
+                    <div class="metric-card" style="background:linear-gradient(135deg,#1a3a5c,#2d6a9f)">
+                        <div class="metric-label">MAE</div>
+                        <div class="metric-value" id="acc-mae">—</div>
+                        <div style="color:#aaa;font-size:0.8em">Mean Absolute Error (W)</div>
+                    </div>
+                    <div class="metric-card" style="background:linear-gradient(135deg,#1a4a3a,#2d9a6a)">
+                        <div class="metric-label">RMSE</div>
+                        <div class="metric-value" id="acc-rmse">—</div>
+                        <div style="color:#aaa;font-size:0.8em">Root Mean Square Error (W)</div>
+                    </div>
+                    <div class="metric-card" style="background:linear-gradient(135deg,#4a1a5c,#8a2db0)">
+                        <div class="metric-label">R²</div>
+                        <div class="metric-value" id="acc-r2">—</div>
+                        <div style="color:#aaa;font-size:0.8em">Coefficient of Determination</div>
+                    </div>
+                </div>
+                <div style="text-align:center;margin:10px 0 20px" id="acc-mape-row" style="display:none">
+                    <span style="color:#aaa">MAPE: </span>
+                    <span id="acc-mape" style="color:#fff;font-weight:bold;font-size:1.2em">—</span>
+                    <span style="color:#aaa"> % &nbsp;|&nbsp; Total predictions: </span>
+                    <span id="acc-total" style="color:#fff;font-weight:bold">—</span>
+                </div>
+            </div>
+
+            <!-- Per-hour-ahead chart -->
+            <div class="card" id="acc-chart-card" style="display:none">
+                <h3>MAE by Hour Ahead</h3>
+                <p style="color:#aaa;font-size:0.85em">How prediction error grows the further ahead we predict</p>
+                <canvas id="acc-hour-chart" height="80"></canvas>
+            </div>
+
+            <!-- Sample predictions table -->
+            <div class="card" id="acc-table-card" style="display:none">
+                <h3>Sample: Last 48 Predictions vs Actual</h3>
+                <div style="overflow-x:auto">
+                    <table id="acc-table">
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Actual (W)</th>
+                                <th>Predicted (W)</th>
+                                <th>Error (W)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="acc-table-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <!-- System Status Tab -->
         <div id="system-tab" class="tab-content">
             <div class="card">
@@ -709,6 +770,105 @@
             document.getElementById('rt-timestamp').value = now.toISOString().slice(0, 16);
         }
         
+        // ====================================
+        // Model Accuracy (Backtest)
+        // ====================================
+        let accHourChart = null;
+
+        async function loadAccuracy() {
+            const statusEl = document.getElementById('accuracy-status');
+            statusEl.style.display = 'block';
+            statusEl.className = 'alert alert-info';
+            statusEl.textContent = 'Loading backtest results...';
+
+            try {
+                const response = await fetch(`${API_SOLAR}/backtest`);
+                if (!response.ok) {
+                    const err = await response.json();
+                    statusEl.className = 'alert alert-warning';
+                    statusEl.textContent = err.detail || 'Backtest results not available yet.';
+                    return;
+                }
+                const data = await response.json();
+
+                // Overall metrics
+                document.getElementById('acc-mae').textContent  = data.overall.mae.toLocaleString() + ' W';
+                document.getElementById('acc-rmse').textContent = data.overall.rmse.toLocaleString() + ' W';
+                document.getElementById('acc-r2').textContent   = data.overall.r2.toFixed(4);
+                document.getElementById('acc-mape').textContent = data.overall.mape_percent.toFixed(2);
+                document.getElementById('acc-total').textContent = data.overall.total_predictions.toLocaleString();
+
+                document.getElementById('accuracy-metrics').style.display = 'grid';
+                document.getElementById('acc-mape-row').style.display     = 'block';
+                document.getElementById('acc-chart-card').style.display   = 'block';
+                document.getElementById('acc-table-card').style.display   = 'block';
+                statusEl.style.display = 'none';
+
+                // Per-hour-ahead chart
+                const hours = data.per_hour_ahead.map(h => `H+${h.hour_ahead}`);
+                const maes  = data.per_hour_ahead.map(h => h.mae);
+                const rmses = data.per_hour_ahead.map(h => h.rmse);
+
+                if (accHourChart) accHourChart.destroy();
+                const ctx = document.getElementById('acc-hour-chart').getContext('2d');
+                accHourChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: hours,
+                        datasets: [
+                            {
+                                label: 'MAE (W)',
+                                data: maes,
+                                backgroundColor: 'rgba(52, 152, 219, 0.7)',
+                                borderColor: '#3498db',
+                                borderWidth: 1,
+                                yAxisID: 'y'
+                            },
+                            {
+                                label: 'RMSE (W)',
+                                data: rmses,
+                                type: 'line',
+                                borderColor: '#e74c3c',
+                                backgroundColor: 'rgba(231,76,60,0.1)',
+                                borderWidth: 2,
+                                pointRadius: 3,
+                                fill: false,
+                                yAxisID: 'y'
+                            }
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: { legend: { labels: { color: '#fff' } } },
+                        scales: {
+                            x: { ticks: { color: '#aaa' }, grid: { color: '#333' } },
+                            y: { ticks: { color: '#aaa' }, grid: { color: '#333' },
+                                 title: { display: true, text: 'Error (W)', color: '#aaa' } }
+                        }
+                    }
+                });
+
+                // Sample table
+                const tbody = document.getElementById('acc-table-body');
+                tbody.innerHTML = '';
+                data.sample_predictions.forEach(row => {
+                    const tr = document.createElement('tr');
+                    const errColor = Math.abs(row.error_W) > 500 ? '#e74c3c' : '#2ecc71';
+                    tr.innerHTML = `
+                        <td>${row.timestamp}</td>
+                        <td>${row.actual_W.toLocaleString()}</td>
+                        <td>${row.predicted_W.toLocaleString()}</td>
+                        <td style="color:${errColor}">${row.error_W > 0 ? '+' : ''}${row.error_W.toLocaleString()}</td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+
+            } catch (err) {
+                statusEl.className = 'alert alert-warning';
+                statusEl.textContent = 'Could not load backtest results: ' + err.message;
+            }
+        }
+
         // Check system status
         async function checkSystemStatus() {
             // Solar API

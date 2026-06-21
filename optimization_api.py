@@ -121,9 +121,9 @@ def optimize_battery(
         prob += (load_forecast[t] == solar_forecast[t] + P_discharge[t] +
                  P_import[t] - P_charge[t] - P_export[t], f"PowerBalance_{t}")
 
-        prob += (SOC[t+1] == SOC[t] +
-                 (battery_config["eta_charge"] * P_charge[t] / battery_config["E_capacity"] * 100)
-                 - (P_discharge[t] / (battery_config["eta_discharge"] * battery_config["E_capacity"]) * 100),
+        charge_rate    = battery_config["eta_charge"]    * 100.0 / battery_config["E_capacity"]
+        discharge_rate = 100.0 / (battery_config["eta_discharge"] * battery_config["E_capacity"])
+        prob += (SOC[t+1] == SOC[t] + charge_rate * P_charge[t] - discharge_rate * P_discharge[t],
                  f"SOC_{t}")
 
         prob += P_charge[t]    <= u_charge[t]    * battery_config["P_charge_max"]

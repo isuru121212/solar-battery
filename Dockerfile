@@ -21,6 +21,8 @@ COPY optimization_api.py      .
 COPY complete_dashboard.html  .
 COPY start.sh                 .
 RUN chmod +x start.sh
+# Copy backtest results if they exist (generated locally by backtest.py)
+COPY backtest_results.cs[v] ./
 
 # Copy model files and data
 COPY models/ ./models/
