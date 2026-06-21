@@ -20,4 +20,4 @@ requests==2.31.0
 httpx==0.27.0
 
 # AWS S3 support (only install locally when USE_S3=true; not needed on Railway)
-# boto3==1.28.0httpx
+# boto3==1.28.0
