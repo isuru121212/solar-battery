@@ -54,10 +54,10 @@ def download_from_s3():
     os.makedirs(str(DATA_DIR),  exist_ok=True)
 
     files = {
-        "models/final_model_20250928_225759.keras":       MODEL_PATH,
-        "models/model_config_20250928_225800.json":       CONFIG_PATH,
-        "models/scaler_features_20250928_225800.pkl":     SCALER_FEATURES_PATH,
-        "models/scaler_target_20250928_225800.pkl":       SCALER_TARGET_PATH,
+        "models/final_model_20260622_124456.keras":       MODEL_PATH,
+        "models/model_config_20260622_124456.json":       CONFIG_PATH,
+        "models/scaler_features_20260622_124456.pkl":     SCALER_FEATURES_PATH,
+        "models/scaler_target_20260622_124456.pkl":       SCALER_TARGET_PATH,
         "data/historical/historical_solar_data.csv":      HISTORICAL_CSV_PATH,
     }
 
