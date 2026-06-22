@@ -33,10 +33,10 @@ S3_BUCKET = os.environ.get("S3_BUCKET", "")
 MODEL_DIR = Path("/tmp/models") if USE_S3 else BASE_DIR / "models"
 DATA_DIR  = Path("/tmp/data")   if USE_S3 else BASE_DIR / "data" / "historical"
 
-MODEL_PATH           = str(MODEL_DIR / "final_model_20260621_192314.keras")
-CONFIG_PATH          = str(MODEL_DIR / "model_config_20260621_192314.json")
-SCALER_FEATURES_PATH = str(MODEL_DIR / "scaler_features_20260621_192314.pkl")
-SCALER_TARGET_PATH   = str(MODEL_DIR / "scaler_target_20260621_192314.pkl")
+MODEL_PATH           = str(MODEL_DIR / "final_model_20260622_155543.keras")
+CONFIG_PATH          = str(MODEL_DIR / "model_config_20260622_155543.json")
+SCALER_FEATURES_PATH = str(MODEL_DIR / "scaler_features_20260622_155543.pkl")
+SCALER_TARGET_PATH   = str(MODEL_DIR / "scaler_target_20260622_155543.pkl")
 HISTORICAL_CSV_PATH  = str(DATA_DIR  / "historical_solar_data.csv")
 
 LATITUDE  = 9.67
@@ -76,43 +76,32 @@ if USE_S3:
     download_from_s3()
 
 def _build_model_from_config(hp: dict, n_features: int, seq_len: int, horizon: int):
-    """Build the CNN+LSTM architecture from hyperparameters dict (no JSON deserialization)."""
-    from tensorflow.keras import Input, regularizers
-    from tensorflow.keras.layers import (
-        Conv1D, MaxPooling1D, Dropout, LSTM, Dense
-    )
+    """Build the fixed CNN+LSTM architecture. hp is kept for backward compat but ignored."""
+    from tensorflow.keras import Input
+    from tensorflow.keras.layers import Conv1D, MaxPooling1D, Dropout, LSTM, Dense
     from tensorflow.keras.models import Model
 
-    l2 = regularizers.l2(hp["l2_regularization"])
     inputs = Input(shape=(seq_len, n_features))
     x = inputs
 
     # CNN block 1
-    for _ in range(hp["n_conv_layers_block1"]):
-        x = Conv1D(hp["conv_filters_1"], hp["kernel_size_1"],
-                   padding="same", activation="relu", kernel_regularizer=l2)(x)
-    x = MaxPooling1D(pool_size=hp["pool_size_1"])(x)
-    x = Dropout(hp["dropout_conv_1"])(x)
+    x = Conv1D(64, 3, activation="relu", padding="same")(x)
+    x = Conv1D(64, 3, activation="relu", padding="same")(x)
+    x = MaxPooling1D(pool_size=2)(x)
+    x = Dropout(0.1)(x)
 
-    # CNN block 2 (optional)
-    if hp.get("use_second_cnn", False):
-        for _ in range(hp["n_conv_layers_block2"]):
-            x = Conv1D(hp["conv_filters_2"], hp["kernel_size_2"],
-                       padding="same", activation="relu", kernel_regularizer=l2)(x)
-        x = MaxPooling1D(pool_size=hp["pool_size_2"])(x)
-        x = Dropout(hp["dropout_conv_2"])(x)
+    # CNN block 2
+    x = Conv1D(128, 5, activation="relu", padding="same")(x)
+    x = MaxPooling1D(pool_size=2)(x)
+    x = Dropout(0.1)(x)
 
     # LSTM
-    x = LSTM(hp["lstm_units"],
-             dropout=hp["dropout_lstm"],
-             recurrent_dropout=hp["recurrent_dropout"])(x)
-    x = Dropout(hp["dropout_after_lstm"])(x)
+    x = LSTM(128, dropout=0.1, recurrent_dropout=0.0)(x)
+    x = Dropout(0.2)(x)
 
-    # Dense layers
-    for i in range(hp["n_dense_layers"]):
-        x = Dense(hp[f"dense_units_{i}"], activation="relu")(x)
-        x = Dropout(hp[f"dropout_dense_{i}"])(x)
-
+    # Dense head
+    x = Dense(64, activation="relu")(x)
+    x = Dropout(0.1)(x)
     outputs = Dense(horizon, activation="linear")(x)
     return Model(inputs, outputs)
 
@@ -250,17 +239,34 @@ def _load_all_models():
         logger.error(f"Failed to load models: {e}")
         raise
 
-# All 62 training features
+# Training features — must match retrain.py exactly
 ALL_TRAINING_FEATURES = [
-    'relative_humidity_2m ', 'wind_speed_10m', 'wind_direction_10m',
-    'cloud_cover_low', 'diffuse_radiation', 'diffuse_radiation_instant',
-    'direct_radiation', 'direct_radiation_instant', 'direct_normal_irradiance',
-    'direct_normal_irradiance_instant', 'is_day', 'hour_angle',
-    'solar_azimuth_rad', 'solar_azimuth_deg', 'is_daylight',
-    'solar_potential', 'wind_cooling', 'weather_clarity_index',
-    'day', 'year', 'day_of_week', 'hour_sin', 'hour_cos',
-    'day_year_sin', 'day_year_cos', 'day_week_sin', 'day_week_cos',
-    'month_sin', 'month_cos', 'season', 'season_sin', 'season_cos',
+    'temperature_2m ',
+    'relative_humidity_2m ',
+    'wind_speed_10m', 'wind_direction_10m',
+    'surface_pressure',
+    'dew_point_2m',
+    'shortwave_radiation_instant',
+    'direct_radiation_instant',
+    'direct_normal_irradiance_instant',
+    'diffuse_radiation_instant',
+    'cloud_cover',
+    'cloud_cover_high',
+    'cloud_cover_mid',
+    'cloud_cover_low',
+    'ALLSKY_KT',
+    'CLRSKY_SFC_SW_DWN',
+    'ALLSKY_SRF_ALB',
+    'is_day', 'is_daylight',
+    'hour_angle',
+    'solar_azimuth_rad', 'solar_azimuth_deg',
+    'solar_potential',
+    'wind_cooling', 'weather_clarity_index',
+    'day', 'year', 'day_of_week',
+    'hour_sin', 'hour_cos',
+    'day_year_sin', 'day_year_cos',
+    'month_sin', 'month_cos',
+    'season_sin', 'season_cos',
     'is_weekend', 'is_month_start',
     'Power(W)_lag_1h', 'Power(W)_lag_2h', 'Power(W)_lag_3h',
     'Power(W)_lag_6h', 'Power(W)_lag_12h', 'Power(W)_lag_24h', 'Power(W)_lag_48h',
@@ -376,10 +382,14 @@ def create_all_features(df):
 
     if 'relative_humidity_2m' in df.columns and 'relative_humidity_2m ' not in df.columns:
         df['relative_humidity_2m '] = df['relative_humidity_2m']
+    if 'temperature_2m' in df.columns and 'temperature_2m ' not in df.columns:
+        df['temperature_2m '] = df['temperature_2m']
     if 'wind_speed_10m' in df.columns:
         df['wind_cooling'] = df['wind_speed_10m'] * 0.1
-
-    df['weather_clarity_index'] = 1.0
+    if 'ALLSKY_KT' in df.columns:
+        df['weather_clarity_index'] = df['ALLSKY_KT'].clip(0, 1)
+    else:
+        df['weather_clarity_index'] = 1.0
 
     df['day']        = df['datetime'].dt.day
     df['month']      = df['datetime'].dt.month

@@ -43,19 +43,44 @@ SEQUENCE_LENGTH    = 48
 PREDICTION_HORIZON = 24
 
 # ===========================
-# ALL 62 TRAINING FEATURES
+# ALL TRAINING FEATURES — expanded with full weather data from dataset
 # ===========================
 ALL_TRAINING_FEATURES = [
-    'relative_humidity_2m ', 'wind_speed_10m', 'wind_direction_10m',
-    'cloud_cover_low', 'diffuse_radiation', 'diffuse_radiation_instant',
-    'direct_radiation', 'direct_radiation_instant', 'direct_normal_irradiance',
-    'direct_normal_irradiance_instant', 'is_day', 'hour_angle',
-    'solar_azimuth_rad', 'solar_azimuth_deg', 'is_daylight',
-    'solar_potential', 'wind_cooling', 'weather_clarity_index',
-    'day', 'year', 'day_of_week', 'hour_sin', 'hour_cos',
-    'day_year_sin', 'day_year_cos', 'day_week_sin', 'day_week_cos',
-    'month_sin', 'month_cos', 'season', 'season_sin', 'season_cos',
+    # Core weather (directly in dataset)
+    'temperature_2m ',
+    'relative_humidity_2m ',
+    'wind_speed_10m', 'wind_direction_10m',
+    'surface_pressure',
+    'dew_point_2m',
+    # Radiation (directly in dataset)
+    'shortwave_radiation_instant',
+    'direct_radiation_instant',
+    'direct_normal_irradiance_instant',
+    'diffuse_radiation_instant',
+    # Cloud cover (directly in dataset — KEY for peak prediction)
+    'cloud_cover',
+    'cloud_cover_high',
+    'cloud_cover_mid',
+    'cloud_cover_low',
+    # Sky clarity indices (directly in dataset)
+    'ALLSKY_KT',          # all-sky clearness index (0=overcast, 1=clear)
+    'CLRSKY_SFC_SW_DWN',  # clear-sky surface shortwave
+    'ALLSKY_SRF_ALB',     # surface albedo
+    # Solar geometry (computed)
+    'is_day', 'is_daylight',
+    'hour_angle',
+    'solar_azimuth_rad', 'solar_azimuth_deg',
+    'solar_potential',
+    # Engineered weather
+    'wind_cooling', 'weather_clarity_index',
+    # Time features
+    'day', 'year', 'day_of_week',
+    'hour_sin', 'hour_cos',
+    'day_year_sin', 'day_year_cos',
+    'month_sin', 'month_cos',
+    'season_sin', 'season_cos',
     'is_weekend', 'is_month_start',
+    # Power lag features
     'Power(W)_lag_1h', 'Power(W)_lag_2h', 'Power(W)_lag_3h',
     'Power(W)_lag_6h', 'Power(W)_lag_12h', 'Power(W)_lag_24h', 'Power(W)_lag_48h',
     'Power(W)_diff_1h', 'Power(W)_diff_24h', 'Power(W)_diff_7d',
@@ -102,9 +127,15 @@ def create_all_features(df):
 
     if 'relative_humidity_2m' in df.columns and 'relative_humidity_2m ' not in df.columns:
         df['relative_humidity_2m '] = df['relative_humidity_2m']
+    if 'temperature_2m' in df.columns and 'temperature_2m ' not in df.columns:
+        df['temperature_2m '] = df['temperature_2m']
     if 'wind_speed_10m' in df.columns:
         df['wind_cooling'] = df['wind_speed_10m'] * 0.1
-    df['weather_clarity_index'] = 1.0
+    # Use actual clearness index if available, else default to 1.0
+    if 'ALLSKY_KT' in df.columns:
+        df['weather_clarity_index'] = df['ALLSKY_KT'].clip(0, 1)
+    else:
+        df['weather_clarity_index'] = 1.0
 
     df['day']         = df['datetime'].dt.day
     df['month']       = df['datetime'].dt.month
@@ -169,45 +200,36 @@ def build_sequences(X, y, seq_len, horizon):
 
 
 # ===========================
-# BUILD MODEL (same architecture as config)
+# BUILD MODEL — fixed architecture with reduced dropout
 # ===========================
-def build_model(n_features, seq_len, horizon, hp):
+def build_model(n_features, seq_len, horizon, hp=None):
     inputs = keras.Input(shape=(seq_len, n_features))
     x = inputs
 
-    # CNN Block 1
-    l2 = regularizers.l2(hp['l2_regularization'])
-    for _ in range(hp['n_conv_layers_block1']):
-        x = layers.Conv1D(hp['conv_filters_1'], hp['kernel_size_1'],
-                          activation='relu', padding='same', kernel_regularizer=l2)(x)
-    x = layers.MaxPooling1D(pool_size=min(hp['pool_size_1'], x.shape[1]))(x)
-    x = layers.Dropout(hp['dropout_conv_1'])(x)
+    # CNN Block 1: extract local patterns (3h windows)
+    x = layers.Conv1D(64, 3, activation='relu', padding='same')(x)
+    x = layers.Conv1D(64, 3, activation='relu', padding='same')(x)
+    x = layers.MaxPooling1D(pool_size=2)(x)
+    x = layers.Dropout(0.1)(x)
 
-    # CNN Block 2
-    if hp.get('use_second_cnn'):
-        for _ in range(hp['n_conv_layers_block2']):
-            x = layers.Conv1D(hp['conv_filters_2'], hp['kernel_size_2'],
-                              activation='relu', padding='same', kernel_regularizer=l2)(x)
-        x = layers.MaxPooling1D(pool_size=min(hp['pool_size_2'], x.shape[1]))(x)
-        x = layers.Dropout(hp['dropout_conv_2'])(x)
+    # CNN Block 2: extract wider patterns (6h windows)
+    x = layers.Conv1D(128, 5, activation='relu', padding='same')(x)
+    x = layers.MaxPooling1D(pool_size=2)(x)
+    x = layers.Dropout(0.1)(x)
 
-    # LSTM
-    x = layers.LSTM(hp['lstm_units'],
-                    dropout=hp['dropout_lstm'],
-                    recurrent_dropout=hp['recurrent_dropout'])(x)
-    x = layers.Dropout(hp['dropout_after_lstm'])(x)
+    # LSTM: temporal dependencies
+    x = layers.LSTM(128, dropout=0.1, recurrent_dropout=0.0)(x)
+    x = layers.Dropout(0.2)(x)
 
-    # Dense layers
-    for i in range(hp['n_dense_layers']):
-        x = layers.Dense(hp[f'dense_units_{i}'], activation='relu')(x)
-        x = layers.Dropout(hp[f'dropout_dense_{i}'])(x)
-
+    # Dense head
+    x = layers.Dense(64, activation='relu')(x)
+    x = layers.Dropout(0.1)(x)
     outputs = layers.Dense(horizon)(x)
 
     model = keras.Model(inputs, outputs)
     model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=hp['learning_rate']),
-        loss='huber',   # Huber is more robust to outliers than MSE
+        optimizer=keras.optimizers.Adam(learning_rate=0.001),
+        loss='mse',
         metrics=['mae']
     )
     return model
@@ -221,13 +243,14 @@ def retrain():
     print("RETRAINING CNN+LSTM ON FULL 1-YEAR DATASET")
     print("=" * 60)
 
-    # Load config for hyperparameters and selected features
+    # Load config for hyperparameters only — features rebuilt from scratch
     with open(CONFIG_PATH, 'r') as f:
         old_config = json.load(f)
     hp               = old_config['best_hyperparameters']
-    selected_indices = old_config['selected_feature_indices']
-    selected_names   = old_config['selected_feature_names']
-    print(f"Using {len(selected_names)} selected features from original config")
+    # Use all features in ALL_TRAINING_FEATURES (indices are 0..N-1)
+    selected_indices = list(range(len(ALL_TRAINING_FEATURES)))
+    selected_names   = ALL_TRAINING_FEATURES
+    print(f"Using {len(selected_names)} features (expanded with full weather data)")
 
     # Load dataset
     print(f"\nLoading dataset...")
@@ -259,8 +282,8 @@ def retrain():
     X_scaled = scaler_features.fit_transform(X_all)
     y_scaled = scaler_target.fit_transform(y_all.reshape(-1, 1)).flatten()
 
-    # Select features
-    X_selected = X_scaled[:, selected_indices]
+    # All features selected (indices = 0..N-1, no subsetting needed)
+    X_selected = X_scaled
     n_features  = X_selected.shape[1]
     print(f"Feature matrix: {X_selected.shape}")
 
@@ -300,8 +323,8 @@ def retrain():
     history = model.fit(
         X_train, y_train,
         validation_data=(X_val, y_val),
-        epochs=200,
-        batch_size=32,
+        epochs=300,
+        batch_size=64,
         callbacks=callbacks,
         verbose=1
     )
