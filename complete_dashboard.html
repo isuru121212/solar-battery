@@ -251,7 +251,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🌞 Solar + Battery Optimization System</h1>
+            <h1> Solar + Battery Optimization System</h1>
             <div>Real-time Monitoring & Optimization Dashboard</div>
         </div>
         
@@ -916,7 +916,10 @@
                 document.getElementById('solar-peak').textContent = data.max_power.toFixed(0);
                 document.getElementById('solar-energy').textContent = data.total_energy_kwh.toFixed(2);
                 
-                const labels = data.timestamps.map((ts, i) => `H${i}`);
+                const labels = data.timestamps.map(ts => {
+                    const d = new Date(ts);
+                    return d.getHours().toString().padStart(2,'0') + ':00';
+                });
                 solarChart.data.labels = labels;
                 solarChart.data.datasets[0].data = data.predictions;
                 solarChart.update();
@@ -1124,7 +1127,7 @@
             document.getElementById('opt-export').textContent = data.summary.total_export_kwh.toFixed(2);
             
             // Update charts
-            const labels = data.schedule.map((_, i) => `H${i}`);
+            const labels = data.schedule.map((_, i) => i.toString().padStart(2,'0') + ':00');
             
             // Power flow chart
             powerFlowChart.data.labels = labels;
