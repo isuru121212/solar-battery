@@ -75,101 +75,94 @@ if USE_S3:
     logger.info("AWS mode — downloading assets from S3...")
     download_from_s3()
 
+def _build_model_from_config(hp: dict, n_features: int, seq_len: int, horizon: int):
+    """Build the CNN+LSTM architecture from hyperparameters dict (no JSON deserialization)."""
+    from tensorflow.keras import Input, regularizers
+    from tensorflow.keras.layers import (
+        Conv1D, MaxPooling1D, Dropout, LSTM, Dense
+    )
+    from tensorflow.keras.models import Model
+
+    l2 = regularizers.l2(hp["l2_regularization"])
+    inputs = Input(shape=(seq_len, n_features))
+    x = inputs
+
+    # CNN block 1
+    for _ in range(hp["n_conv_layers_block1"]):
+        x = Conv1D(hp["conv_filters_1"], hp["kernel_size_1"],
+                   padding="same", activation="relu", kernel_regularizer=l2)(x)
+    x = MaxPooling1D(pool_size=hp["pool_size_1"])(x)
+    x = Dropout(hp["dropout_conv_1"])(x)
+
+    # CNN block 2 (optional)
+    if hp.get("use_second_cnn", False):
+        for _ in range(hp["n_conv_layers_block2"]):
+            x = Conv1D(hp["conv_filters_2"], hp["kernel_size_2"],
+                       padding="same", activation="relu", kernel_regularizer=l2)(x)
+        x = MaxPooling1D(pool_size=hp["pool_size_2"])(x)
+        x = Dropout(hp["dropout_conv_2"])(x)
+
+    # LSTM
+    x = LSTM(hp["lstm_units"],
+             dropout=hp["dropout_lstm"],
+             recurrent_dropout=hp["recurrent_dropout"])(x)
+    x = Dropout(hp["dropout_after_lstm"])(x)
+
+    # Dense layers
+    for i in range(hp["n_dense_layers"]):
+        x = Dense(hp[f"dense_units_{i}"], activation="relu")(x)
+        x = Dropout(hp[f"dropout_dense_{i}"])(x)
+
+    outputs = Dense(horizon, activation="linear")(x)
+    return Model(inputs, outputs)
+
+
 def load_legacy_keras_model(model_path):
     """
-    Load a Keras 3 .keras file under Keras 2 (TF 2.x).
-
-    Strategy:
-    1. Extract the zip to a temp dir.
-    2. Patch config.json: batch_shape → batch_input_shape, DTypePolicy → string.
-    3. Rebuild the model from the patched config.
-    4. Load weights from model.weights.h5 by_name=True so Keras 2 layer names
-       are matched against the HDF5 group names — tolerant of missing entries.
+    Load model: try direct load first, then rebuild architecture from config
+    and load weights from H5 — bypasses JSON deserialization incompatibilities
+    between Keras 3 (save) and any Keras version (load).
     """
     import zipfile
     import tempfile
     import h5py
 
-    # Fast path: try direct load first (works if saved with same Keras version)
+    # Fast path: direct load works when Keras versions match
     try:
-        return keras.models.load_model(model_path, compile=False)
+        m = keras.models.load_model(model_path, compile=False)
+        logger.info("Model loaded directly.")
+        return m
     except Exception as e:
-        logger.warning(f"Direct load failed ({e}), falling back to manual patch...")
+        logger.warning(f"Direct load failed ({type(e).__name__}), rebuilding from config...")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         with zipfile.ZipFile(model_path, 'r') as zf:
             zf.extractall(tmpdir)
-            zip_names = zf.namelist()
 
-        logger.info(f"Keras zip contents: {zip_names}")
-
-        # Locate config file (Keras 3 → config.json, Keras 2 → model.json)
-        config_file = None
-        for candidate in ('config.json', 'model.json'):
-            p = os.path.join(tmpdir, candidate)
-            if os.path.exists(p):
-                config_file = p
-                break
-        if config_file is None:
-            raise FileNotFoundError(f"No model config in .keras zip. Contents: {zip_names}")
+        # Read the saved config to get hyperparameters
+        config_file = os.path.join(tmpdir, 'config.json')
+        if not os.path.exists(config_file):
+            config_file = os.path.join(tmpdir, 'model.json')
 
         with open(config_file, 'r') as f:
-            model_config = json.load(f)
+            raw = json.load(f)
 
-        # Keras 3 → Keras 2 module path remapping
-        MODULE_MAP = {
-            'keras.src.engine.functional':      'keras.engine.functional',
-            'keras.src.layers.core.input_layer':'keras.layers',
-            'keras.src.layers.convolutional.conv1d': 'keras.layers',
-            'keras.src.layers.pooling.max_pooling1d': 'keras.layers',
-            'keras.src.layers.regularization.dropout': 'keras.layers',
-            'keras.src.layers.rnn.lstm':        'keras.layers',
-            'keras.src.layers.core.dense':      'keras.layers',
-            'keras.src.initializers.glorot_uniform': 'keras.initializers',
-            'keras.src.initializers.constant':  'keras.initializers',
-            'keras.src.initializers.zeros':     'keras.initializers',
-            'keras.src.initializers.orthogonal':'keras.initializers',
-            'keras.src.regularizers.l2':        'keras.regularizers',
-            'keras.src.optimizers.adam':        'keras.optimizers',
-        }
+        # Load our own saved hyperparameters config
+        with open(CONFIG_PATH, 'r') as f:
+            saved_cfg = json.load(f)
 
-        def fix_config(obj):
-            if isinstance(obj, dict):
-                # Fix Keras3 module paths → Keras2
-                if 'module' in obj and isinstance(obj['module'], str):
-                    obj['module'] = MODULE_MAP.get(obj['module'], obj['module'])
-                # Remove registered_name (Keras3 only, causes errors in Keras2)
-                obj.pop('registered_name', None)
-                # Fix batch_shape → batch_input_shape
-                if 'batch_shape' in obj:
-                    obj['batch_input_shape'] = obj.pop('batch_shape')
-                # Fix DTypePolicy dtype object → string
-                if isinstance(obj.get('dtype'), dict):
-                    dp = obj['dtype']
-                    if dp.get('class_name') == 'DTypePolicy':
-                        obj['dtype'] = dp.get('config', {}).get('name', 'float32')
-                # Remove build_config and compile_config (Keras3 only)
-                obj.pop('build_config', None)
-                obj.pop('compile_config', None)
-                # Remove shared_object_id (causes Keras2 deserialization errors)
-                obj.pop('shared_object_id', None)
-                for v in list(obj.values()):
-                    fix_config(v)
-            elif isinstance(obj, list):
-                for item in obj:
-                    fix_config(item)
+        hp      = saved_cfg["best_hyperparameters"]
+        seq_len = saved_cfg.get("sequence_length", 48)
+        horizon = saved_cfg.get("prediction_horizon", 24)
+        n_feat  = len(saved_cfg["selected_feature_indices"])
 
-        fix_config(model_config)
-        logger.info(f"Patched config top-level class: {model_config.get('class_name')} module: {model_config.get('module')}")
+        logger.info(f"Building model: seq={seq_len}, horizon={horizon}, features={n_feat}")
+        model = _build_model_from_config(hp, n_feat, seq_len, horizon)
+        logger.info("Model architecture built from hyperparameters.")
 
-        # Build model from patched config
-        model = keras.models.model_from_json(json.dumps(model_config))
-        logger.info("Model architecture rebuilt from patched config.")
-
-        # Load weights from the HDF5 weights file by layer name
+        # Load weights from H5
         weights_file = os.path.join(tmpdir, 'model.weights.h5')
         if not os.path.exists(weights_file):
-            # Fallback: look for any .h5 file
             for fname in os.listdir(tmpdir):
                 if fname.endswith('.h5'):
                     weights_file = os.path.join(tmpdir, fname)
