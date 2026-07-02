@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY main_solar_api.py        .
 COPY optimization_api.py      .
+COPY inverter_monitor.py      .
 COPY complete_dashboard.html  .
 COPY start.sh                 .
 RUN chmod +x start.sh
