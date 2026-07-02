@@ -32,10 +32,10 @@ SCALER_TARGET_PATH   = str(MODEL_DIR / "scaler_target_20250928_225800.pkl")
 BACKTEST_CSV = r"F:\research papers\isuru\New folder (6)\hourly_solar_power_imputed original_new.csv"
 
 # Point to the new retrained model files
-MODEL_PATH           = str(MODEL_DIR / "final_model_20260621_192314.keras")
-CONFIG_PATH          = str(MODEL_DIR / "model_config_20260621_192314.json")
-SCALER_FEATURES_PATH = str(MODEL_DIR / "scaler_features_20260621_192314.pkl")
-SCALER_TARGET_PATH   = str(MODEL_DIR / "scaler_target_20260621_192314.pkl")
+MODEL_PATH           = str(MODEL_DIR / "final_model_20260622_155543.keras")
+CONFIG_PATH          = str(MODEL_DIR / "model_config_20260622_155543.json")
+SCALER_FEATURES_PATH = str(MODEL_DIR / "scaler_features_20260622_155543.pkl")
+SCALER_TARGET_PATH   = str(MODEL_DIR / "scaler_target_20260622_155543.pkl")
 
 LATITUDE  = 9.67
 LONGITUDE = 80.18
@@ -48,18 +48,35 @@ OUTPUT_CSV     = str(BASE_DIR / "backtest_results.csv")
 OUTPUT_SUMMARY = str(BASE_DIR / "backtest_summary.txt")
 
 # ===========================
-# ALL 62 TRAINING FEATURES
+# TRAINING FEATURES — must match retrain.py exactly
 # ===========================
 ALL_TRAINING_FEATURES = [
-    'relative_humidity_2m ', 'wind_speed_10m', 'wind_direction_10m',
-    'cloud_cover_low', 'diffuse_radiation', 'diffuse_radiation_instant',
-    'direct_radiation', 'direct_radiation_instant', 'direct_normal_irradiance',
-    'direct_normal_irradiance_instant', 'is_day', 'hour_angle',
-    'solar_azimuth_rad', 'solar_azimuth_deg', 'is_daylight',
-    'solar_potential', 'wind_cooling', 'weather_clarity_index',
-    'day', 'year', 'day_of_week', 'hour_sin', 'hour_cos',
-    'day_year_sin', 'day_year_cos', 'day_week_sin', 'day_week_cos',
-    'month_sin', 'month_cos', 'season', 'season_sin', 'season_cos',
+    'temperature_2m ',
+    'relative_humidity_2m ',
+    'wind_speed_10m', 'wind_direction_10m',
+    'surface_pressure',
+    'dew_point_2m',
+    'shortwave_radiation_instant',
+    'direct_radiation_instant',
+    'direct_normal_irradiance_instant',
+    'diffuse_radiation_instant',
+    'cloud_cover',
+    'cloud_cover_high',
+    'cloud_cover_mid',
+    'cloud_cover_low',
+    'ALLSKY_KT',
+    'CLRSKY_SFC_SW_DWN',
+    'ALLSKY_SRF_ALB',
+    'is_day', 'is_daylight',
+    'hour_angle',
+    'solar_azimuth_rad', 'solar_azimuth_deg',
+    'solar_potential',
+    'wind_cooling', 'weather_clarity_index',
+    'day', 'year', 'day_of_week',
+    'hour_sin', 'hour_cos',
+    'day_year_sin', 'day_year_cos',
+    'month_sin', 'month_cos',
+    'season_sin', 'season_cos',
     'is_weekend', 'is_month_start',
     'Power(W)_lag_1h', 'Power(W)_lag_2h', 'Power(W)_lag_3h',
     'Power(W)_lag_6h', 'Power(W)_lag_12h', 'Power(W)_lag_24h', 'Power(W)_lag_48h',
@@ -74,51 +91,47 @@ ALL_TRAINING_FEATURES = [
 ]
 
 # ===========================
-# LOAD MODEL
+# LOAD MODEL — fixed architecture, load weights directly
 # ===========================
-def load_legacy_keras_model(model_path):
+def build_model(n_features, seq_len, horizon):
+    from tensorflow.keras import Input
+    from tensorflow.keras.layers import Conv1D, MaxPooling1D, Dropout, LSTM, Dense
+    from tensorflow.keras.models import Model
+
+    inputs = Input(shape=(seq_len, n_features))
+    x = inputs
+    x = Conv1D(64, 3, activation="relu", padding="same")(x)
+    x = Conv1D(64, 3, activation="relu", padding="same")(x)
+    x = MaxPooling1D(pool_size=2)(x)
+    x = Dropout(0.1)(x)
+    x = Conv1D(128, 5, activation="relu", padding="same")(x)
+    x = MaxPooling1D(pool_size=2)(x)
+    x = Dropout(0.1)(x)
+    x = LSTM(128, dropout=0.1, recurrent_dropout=0.0)(x)
+    x = Dropout(0.2)(x)
+    x = Dense(64, activation="relu")(x)
+    x = Dropout(0.1)(x)
+    outputs = Dense(horizon)(x)
+    return Model(inputs, outputs)
+
+
+def load_legacy_keras_model(model_path, n_features=None):
     try:
         return keras.models.load_model(model_path, compile=False)
     except Exception as e:
-        print(f"Direct load failed ({e}), patching config...")
+        print(f"Direct load failed ({e}), rebuilding from fixed architecture...")
+
+    import h5py
+    model = build_model(n_features or len(ALL_TRAINING_FEATURES), SEQUENCE_LENGTH, PREDICTION_HORIZON)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         with zipfile.ZipFile(model_path, 'r') as zf:
             zf.extractall(tmpdir)
-
-        config_file = None
-        for candidate in ('config.json', 'model.json'):
-            p = os.path.join(tmpdir, candidate)
-            if os.path.exists(p):
-                config_file = p
-                break
-
-        with open(config_file, 'r') as f:
-            model_config = json.load(f)
-
-        def fix_config(obj):
-            if isinstance(obj, dict):
-                if 'batch_shape' in obj:
-                    obj['batch_input_shape'] = obj.pop('batch_shape')
-                if isinstance(obj.get('dtype'), dict):
-                    dp = obj['dtype']
-                    if dp.get('class_name') == 'DTypePolicy':
-                        obj['dtype'] = dp.get('config', {}).get('name', 'float32')
-                for v in list(obj.values()):
-                    fix_config(v)
-            elif isinstance(obj, list):
-                for item in obj:
-                    fix_config(item)
-
-        fix_config(model_config)
-
-        model = keras.models.model_from_json(json.dumps(model_config))
-
         weights_file = os.path.join(tmpdir, 'model.weights.h5')
         if os.path.exists(weights_file):
             _load_weights_by_name(model, weights_file)
 
-        return model
+    return model
 
 
 def _load_weights_by_name(model, weights_path):
@@ -197,10 +210,14 @@ def create_all_features(df):
 
     if 'relative_humidity_2m' in df.columns and 'relative_humidity_2m ' not in df.columns:
         df['relative_humidity_2m '] = df['relative_humidity_2m']
+    if 'temperature_2m' in df.columns and 'temperature_2m ' not in df.columns:
+        df['temperature_2m '] = df['temperature_2m']
     if 'wind_speed_10m' in df.columns:
         df['wind_cooling'] = df['wind_speed_10m'] * 0.1
-
-    df['weather_clarity_index'] = 1.0
+    if 'ALLSKY_KT' in df.columns:
+        df['weather_clarity_index'] = df['ALLSKY_KT'].clip(0, 1)
+    else:
+        df['weather_clarity_index'] = 1.0
 
     df['day']         = df['datetime'].dt.day
     df['month']       = df['datetime'].dt.month
@@ -348,7 +365,7 @@ def run_backtest():
     elif 'timestamp' in df.columns:
         df['datetime'] = pd.to_datetime(df['timestamp'])
     df = df.sort_values('datetime').reset_index(drop=True)
-    print(f"Dataset: {len(df)} rows | {df['datetime'].min()} → {df['datetime'].max()}")
+    print(f"Dataset: {len(df)} rows | {df['datetime'].min()} to {df['datetime'].max()}")
 
     # Build full feature set once on the entire dataset
     print("\nEngineering features for full dataset...")
@@ -374,7 +391,7 @@ def run_backtest():
     total     = len(steps)
 
     print(f"\nBacktest steps: {total} (step size = {STEP_SIZE}h)")
-    print(f"Each step: use rows [i : i+{SEQUENCE_LENGTH}] → predict next {PREDICTION_HORIZON}h\n")
+    print(f"Each step: use rows [i : i+{SEQUENCE_LENGTH}] -> predict next {PREDICTION_HORIZON}h\n")
 
     results = []
     all_actual    = []

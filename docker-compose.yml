@@ -2,6 +2,18 @@ version: "3.8"
 
 services:
 
+  emqx:
+    image: emqx/emqx:5.4.1
+    ports:
+      - "1883:1883"   # MQTT (plaintext) - publishers/subscribers connect here
+      - "8083:8083"   # MQTT over WebSocket
+      - "18083:18083" # EMQX Dashboard (http://localhost:18083, admin/public default)
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18083/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   solar-api:
     build:
       context: .
@@ -15,6 +27,13 @@ services:
     environment:
       - USE_S3=false          # set to true + add S3_BUCKET to use S3
       # - S3_BUCKET=your-bucket-name
+      - MQTT_BROKER_HOST=emqx
+      - MQTT_BROKER_PORT=1883
+      - MQTT_USE_TLS=false
+      - MQTT_TOPIC=solar/inverter/readings
+    depends_on:
+      emqx:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/status"]
       interval: 30s

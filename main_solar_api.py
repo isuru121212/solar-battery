@@ -15,6 +15,8 @@ import logging
 from pathlib import Path
 from tensorflow import keras
 
+from inverter_monitor import inverter_router, start_inverter_monitor
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -488,6 +490,7 @@ def make_prediction(window_df):
 async def lifespan(_app: FastAPI):
     _load_all_models()
     auto_initialize()
+    start_inverter_monitor()
     yield
 
 app = FastAPI(title="Solar Power Prediction API", lifespan=lifespan)
@@ -499,6 +502,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(inverter_router)
 
 # ===========================
 # PYDANTIC MODELS

@@ -464,7 +464,7 @@
 <!-- ─── Sidebar ─────────────────────────────────────────── -->
 <nav class="sidebar">
     <div class="sidebar-logo">
-        <div class="logo-icon">☀</div>
+        <div class="logo-icon"></div>
         <h1>Solar + Battery<br>Optimization</h1>
         <p>Real-time Dashboard</p>
     </div>
@@ -481,6 +481,9 @@
         </div>
         <div class="nav-item" onclick="switchPage('page-accuracy', this); loadAccuracy()">
             <span class="nav-icon">📊</span> Model Accuracy
+        </div>
+        <div class="nav-item" onclick="switchPage('page-monitor', this); loadInverterStatus()">
+            <span class="nav-icon">🔌</span> Live Monitor
         </div>
         <div class="nav-item" onclick="switchPage('page-system', this)">
             <span class="nav-icon">⚙</span> System Status
@@ -745,6 +748,55 @@
     </div>
 
     <!-- ── Page: System Status ── -->
+    <!-- ── Page: Live Monitor ── -->
+    <div class="page" id="page-monitor">
+        <div class="card">
+            <div class="card-title">
+                Live Inverter Data
+                <span style="float:right; font-size:12px; font-weight:400">
+                    <span class="dot" id="inv-status-dot"></span>
+                    <span id="inv-status-text">Checking…</span>
+                </span>
+            </div>
+
+            <div class="stats-row">
+                <div class="stat-tile blue">
+                    <div class="label">Input Voltage</div>
+                    <div class="value"><span id="inv-input-voltage">—</span><span class="unit">V</span></div>
+                </div>
+                <div class="stat-tile blue">
+                    <div class="label">Input Current</div>
+                    <div class="value"><span id="inv-input-current">—</span><span class="unit">A</span></div>
+                </div>
+                <div class="stat-tile blue">
+                    <div class="label">Input Frequency</div>
+                    <div class="value"><span id="inv-input-frequency">—</span><span class="unit">Hz</span></div>
+                </div>
+                <div class="stat-tile green">
+                    <div class="label">PV Voltage</div>
+                    <div class="value"><span id="inv-pv-voltage">—</span><span class="unit">V</span></div>
+                </div>
+                <div class="stat-tile green">
+                    <div class="label">PV Current</div>
+                    <div class="value"><span id="inv-pv-current">—</span><span class="unit">A</span></div>
+                </div>
+                <div class="stat-tile yellow">
+                    <div class="label">PV Power</div>
+                    <div class="value"><span id="inv-pv-power">—</span><span class="unit">W</span></div>
+                </div>
+            </div>
+
+            <div class="chart-wrap">
+                <canvas id="inverterChart"></canvas>
+            </div>
+
+            <div style="margin-top:16px; display:flex; align-items:center; gap:16px">
+                <button class="btn btn-neutral" onclick="loadInverterStatus()">↻ Refresh Now</button>
+                <span style="font-size:12px; color:var(--muted)">Last reading: <span id="inv-last-update">Never</span></span>
+            </div>
+        </div>
+    </div>
+
     <div class="page" id="page-system">
         <div class="grid-2">
             <div class="card">
@@ -817,7 +869,7 @@ const apis = getApiUrls();
 const API_SOLAR = apis.solar;
 const API_OPT   = apis.opt;
 
-let solarChart, powerFlowChart, batteryChart, socChart, accHourChart;
+let solarChart, powerFlowChart, batteryChart, socChart, accHourChart, inverterChart;
 let optimizationResults = null;
 
 // ─── Chart defaults ───────────────────────────────────────
@@ -831,7 +883,9 @@ window.onload = function() {
     setCurrentTime();
     checkSystemStatus();
     refreshSolarPredictions();
+    loadInverterStatus();
     setInterval(checkSystemStatus, 30000);
+    setInterval(loadInverterStatus, 10000);
 };
 
 // ─── Navigation ───────────────────────────────────────────
@@ -840,6 +894,7 @@ const PAGE_TITLES = {
     'page-input':    'Data Input',
     'page-opt':      'Optimization',
     'page-accuracy': 'Model Accuracy',
+    'page-monitor':  'Live Monitor',
     'page-system':   'System Status'
 };
 
@@ -879,6 +934,32 @@ function initCharts() {
                 tension: 0.4,
                 pointRadius: 3,
                 pointBackgroundColor: '#f0a500',
+                fill: true
+            }]
+        },
+        options: {
+            ...chartDefaults(),
+            scales: {
+                x: { ticks: { color: '#8b909a' }, grid: { color: '#2e3138' } },
+                y: { ticks: { color: '#8b909a' }, grid: { color: '#2e3138' }, beginAtZero: true,
+                     title: { display: true, text: 'Power (W)', color: '#8b909a' } }
+            }
+        }
+    });
+
+    inverterChart = new Chart(document.getElementById('inverterChart').getContext('2d'), {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'PV Power (W)',
+                data: [],
+                borderColor: '#3ecf8e',
+                backgroundColor: 'rgba(62,207,142,0.08)',
+                borderWidth: 2,
+                tension: 0.3,
+                pointRadius: 2,
+                pointBackgroundColor: '#3ecf8e',
                 fill: true
             }]
         },
@@ -1250,6 +1331,50 @@ async function checkSystemStatus() {
         check(`${API_SOLAR}/status`, 'solar-api-dot', 'solar-api-text', 'sb-solar-dot', 'sb-solar-txt', 'Solar API'),
         check(`${API_OPT}/status`,   'opt-api-dot',   'opt-api-text',   'sb-opt-dot',   'sb-opt-txt',   'Opt API')
     ]);
+}
+
+// ─── Live inverter monitor ──────────────────────────────────
+async function loadInverterStatus() {
+    try {
+        const status = await (await fetch(`${API_SOLAR}/inverter/status`)).json();
+        const dot  = document.getElementById('inv-status-dot');
+        const text = document.getElementById('inv-status-text');
+        if (status.connected) {
+            dot.className = 'dot online';
+            text.textContent = 'Connected';
+        } else if (status.configured) {
+            dot.className = 'dot offline';
+            text.textContent = 'Configured, not connected';
+        } else {
+            dot.className = 'dot offline';
+            text.textContent = 'Not configured';
+        }
+
+        const latest = await (await fetch(`${API_SOLAR}/inverter/latest`)).json();
+        if (latest && latest.timestamp) {
+            document.getElementById('inv-input-voltage').textContent   = latest['Input Voltage (V)']   ?? '—';
+            document.getElementById('inv-input-current').textContent   = latest['Input Current (A)']   ?? '—';
+            document.getElementById('inv-input-frequency').textContent = latest['Input Frequency (Hz)']?? '—';
+            document.getElementById('inv-pv-voltage').textContent      = latest['PV Voltage (V)']      ?? '—';
+            document.getElementById('inv-pv-current').textContent      = latest['PV Current (A)']      ?? '—';
+            document.getElementById('inv-pv-power').textContent        = latest['PV Power (W)']        ?? '—';
+            document.getElementById('inv-last-update').textContent     = new Date(latest.timestamp).toLocaleString();
+        }
+
+        const hist = await (await fetch(`${API_SOLAR}/inverter/history?limit=60`)).json();
+        if (hist.readings && hist.readings.length) {
+            inverterChart.data.labels = hist.readings.map(r => {
+                const d = new Date(r.timestamp);
+                return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+            });
+            inverterChart.data.datasets[0].data = hist.readings.map(r => r['PV Power (W)']);
+            inverterChart.update();
+        }
+    } catch (e) {
+        console.error('Inverter monitor fetch failed:', e);
+        document.getElementById('inv-status-dot').className = 'dot offline';
+        document.getElementById('inv-status-text').textContent = 'Offline';
+    }
 }
 
 // ─── Sample data ──────────────────────────────────────────
