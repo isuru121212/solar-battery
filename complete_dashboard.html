@@ -1350,14 +1350,24 @@ async function loadInverterStatus() {
             text.textContent = 'Not configured';
         }
 
+        // Accepts either "Input Voltage (V)" style keys or snake_case (input_voltage_v) keys,
+        // since different publisher scripts may format the payload differently.
+        function pick(obj, ...keys) {
+            for (const k of keys) if (obj[k] !== undefined) return obj[k];
+            return undefined;
+        }
+        function fmt(val) {
+            return typeof val === 'number' ? val.toFixed(2) : (val ?? '—');
+        }
+
         const latest = await (await fetch(`${API_SOLAR}/inverter/latest`)).json();
         if (latest && latest.timestamp) {
-            document.getElementById('inv-input-voltage').textContent   = latest['Input Voltage (V)']   ?? '—';
-            document.getElementById('inv-input-current').textContent   = latest['Input Current (A)']   ?? '—';
-            document.getElementById('inv-input-frequency').textContent = latest['Input Frequency (Hz)']?? '—';
-            document.getElementById('inv-pv-voltage').textContent      = latest['PV Voltage (V)']      ?? '—';
-            document.getElementById('inv-pv-current').textContent      = latest['PV Current (A)']      ?? '—';
-            document.getElementById('inv-pv-power').textContent        = latest['PV Power (W)']        ?? '—';
+            document.getElementById('inv-input-voltage').textContent   = fmt(pick(latest, 'Input Voltage (V)',   'input_voltage_v'));
+            document.getElementById('inv-input-current').textContent   = fmt(pick(latest, 'Input Current (A)',   'input_current_a'));
+            document.getElementById('inv-input-frequency').textContent = fmt(pick(latest, 'Input Frequency (Hz)','input_frequency_hz'));
+            document.getElementById('inv-pv-voltage').textContent      = fmt(pick(latest, 'PV Voltage (V)',      'pv_voltage_v'));
+            document.getElementById('inv-pv-current').textContent      = fmt(pick(latest, 'PV Current (A)',      'pv_current_a'));
+            document.getElementById('inv-pv-power').textContent        = fmt(pick(latest, 'PV Power (W)',        'pv_power_w'));
             document.getElementById('inv-last-update').textContent     = new Date(latest.timestamp).toLocaleString();
         }
 
@@ -1367,7 +1377,7 @@ async function loadInverterStatus() {
                 const d = new Date(r.timestamp);
                 return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
             });
-            inverterChart.data.datasets[0].data = hist.readings.map(r => r['PV Power (W)']);
+            inverterChart.data.datasets[0].data = hist.readings.map(r => pick(r, 'PV Power (W)', 'pv_power_w'));
             inverterChart.update();
         }
     } catch (e) {
